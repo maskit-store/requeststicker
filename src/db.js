@@ -173,6 +173,13 @@ ensureColumn('variants', 'package_type', "TEXT NOT NULL DEFAULT 'sticker'");
 ensureColumn('variants', 'package_type_manual', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('request_items', 'package_type', "TEXT DEFAULT ''");
 ensureColumn('request_items', 'is_manual', 'INTEGER NOT NULL DEFAULT 0');
+// progress tracking: naik cetak (printed) & terkirim (delivered)
+ensureColumn('requests', 'printed_at', "TEXT DEFAULT ''");
+ensureColumn('requests', 'printed_by', "TEXT DEFAULT ''");
+ensureColumn('requests', 'delivered_at', "TEXT DEFAULT ''");
+ensureColumn('requests', 'delivered_by', "TEXT DEFAULT ''");
+ensureColumn('requests', 'delivered_note', "TEXT DEFAULT ''");
+db.exec('CREATE INDEX IF NOT EXISTS idx_items_variant ON request_items(variant_id)');
 
 // ---- helpers ----
 function hashPassword(pw) {

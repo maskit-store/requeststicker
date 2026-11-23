@@ -6,7 +6,7 @@ const ROLE_LABEL = { desainer: 'Desainer', manager_desain: 'Manager Desain', pur
 const APPROVER_ROLES = ['desainer', 'purchasing'];
 const STATUS_LABEL = {
   pending: 'Menunggu Persetujuan', approved: 'Disetujui', rejected: 'Ditolak',
-  sent: 'Dikirim ke Vendor', done: 'Selesai', cancelled: 'Dibatalkan',
+  sent: 'Naik Cetak', done: 'Terkirim', cancelled: 'Dibatalkan',
 };
 const C = { ink: '#1f2937', muted: '#6b7280', line: '#d1d5db', head: '#111827', accent: '#0f766e', soft: '#f3f4f6', link: '#1d4ed8', red: '#b91c1c' };
 

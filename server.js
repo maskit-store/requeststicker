@@ -222,7 +222,11 @@ app.get('/api/products', auth(), (req, res) => {
 app.get('/api/products/:id', auth(), (req, res) => {
   const p = db.prepare(`SELECT p.*, b.name AS brand_name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = ?`).get(req.params.id);
   if (!p) throw new HttpError(404, 'Produk tidak ditemukan.');
-  const variants = db.prepare('SELECT * FROM variants WHERE product_id = ? AND active = 1 ORDER BY name').all(p.id).map(variantRow);
+  const lastOrder = db.prepare(`SELECT r.number, r.request_date, r.requester_name, r.division, r.status, i.qty, i.request_id
+    FROM request_items i JOIN requests r ON r.id = i.request_id
+    WHERE i.variant_id = ? AND r.status IN ('pending','approved','sent','done') ORDER BY r.request_date DESC, r.id DESC LIMIT 1`);
+  const variants = db.prepare('SELECT * FROM variants WHERE product_id = ? AND active = 1 ORDER BY name').all(p.id)
+    .map(v => ({ ...variantRow(v), last_order: lastOrder.get(v.id) || null }));
   res.json({ ...productRow(p), variants });
 });
 
@@ -460,8 +464,9 @@ function loadRequest(id) {
     WHERE request_id = ? ORDER BY id DESC`).all(r.id);
   return r;
 }
+// Semua user boleh melihat seluruh request tim agar tidak terjadi order ganda.
 function canSee(user, r) {
-  return user.role !== 'user' || r.requester_id === user.id;
+  return !!user && !!r;
 }
 function recomputeStatus(requestId) {
   const r = db.prepare('SELECT status FROM requests WHERE id = ?').get(requestId);
@@ -496,6 +501,7 @@ app.post('/api/requests', auth(), (req, res) => {
       const brand = str(it.brand, 100), productName = str(it.product_name, 200);
       if (!brand) throw bad(`Item #${i + 1}: isi nama brand.`);
       if (!productName) throw bad(`Item #${i + 1}: isi nama produk.`);
+      if (!it.manual_confirmed) throw bad(`Item #${i + 1}: input manual hanya untuk produk yang tidak ada di database. Cari dulu di database, lalu centang konfirmasi.`);
       const link = str(it.drive_link, 1000);
       const fileId = extractDriveId(link);
       const v = {
@@ -531,7 +537,8 @@ app.post('/api/requests', auth(), (req, res) => {
 app.get('/api/requests', auth(), (req, res) => {
   const where = [];
   const args = [];
-  if (req.user.role === 'user' || req.query.mine) { where.push('r.requester_id = ?'); args.push(req.user.id); }
+  if (req.query.mine) { where.push('r.requester_id = ?'); args.push(req.user.id); }
+  if (req.query.division) { where.push('r.division = ?'); args.push(str(req.query.division, 100)); }
   if (req.query.status) { where.push('r.status = ?'); args.push(str(req.query.status, 20)); }
   if (req.query.from) { where.push('r.request_date >= ?'); args.push(str(req.query.from, 10)); }
   if (req.query.to) { where.push('r.request_date <= ?'); args.push(str(req.query.to, 10)); }
@@ -595,18 +602,82 @@ app.post('/api/requests/:id/reopen', auth('admin'), (req, res) => {
   res.json(loadRequest(r.id));
 });
 
-app.post('/api/requests/:id/status', auth('admin'), (req, res) => {
+// Progress: approved → sent ("Naik Cetak", admin/purchasing) → done ("Terkirim", purchasing).
+app.post('/api/requests/:id/status', auth('admin', 'purchasing'), (req, res) => {
   const r = loadRequest(req.params.id);
   if (!r) throw new HttpError(404, 'Request tidak ditemukan.');
   const status = str(req.body.status, 20);
   const allowed = { sent: ['approved'], done: ['sent', 'approved'], cancelled: ['pending', 'rejected', 'approved'] };
   if (!allowed[status]) throw bad('Status tidak valid.');
+  if (status === 'cancelled' && req.user.role !== 'admin') throw new HttpError(403, 'Hanya admin yang bisa membatalkan dari sini.');
   if (!allowed[status].includes(r.status)) {
-    if (status === 'sent') throw bad('Request wajib disetujui & ditandatangani Desainer dan Purchasing sebelum diteruskan ke vendor.');
+    if (status === 'sent') throw bad('Request wajib disetujui & ditandatangani Desainer dan Purchasing sebelum naik cetak.');
     throw bad(`Tidak bisa mengubah status dari "${STATUS_LABEL[r.status]}" ke "${STATUS_LABEL[status]}".`);
   }
-  db.prepare(`UPDATE requests SET status=?, status_note=?, updated_at=datetime('now') WHERE id=?`).run(status, str(req.body.note, 500), r.id);
+  const note = str(req.body.note, 500);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.date || '') ? req.body.date : today();
+  if (status === 'sent') {
+    db.prepare(`UPDATE requests SET status='sent', status_note=?, printed_at=?, printed_by=?, updated_at=datetime('now') WHERE id=?`)
+      .run(note, date, req.user.name, r.id);
+  } else if (status === 'done') {
+    db.prepare(`UPDATE requests SET status='done', delivered_at=?, delivered_by=?, delivered_note=?,
+      printed_at = CASE WHEN printed_at = '' OR printed_at IS NULL THEN ? ELSE printed_at END,
+      printed_by = CASE WHEN printed_by = '' OR printed_by IS NULL THEN ? ELSE printed_by END,
+      updated_at=datetime('now') WHERE id=?`).run(date, req.user.name, note, date, req.user.name, r.id);
+  } else {
+    db.prepare(`UPDATE requests SET status=?, status_note=?, updated_at=datetime('now') WHERE id=?`).run(status, note, r.id);
+  }
   res.json(loadRequest(r.id));
+});
+
+// ---------- shared order history & double-order check ----------
+const ACTIVE_STATUSES = "('pending','approved','sent','done')";
+const HISTORY_SELECT = `SELECT i.id AS item_id, i.request_id, i.variant_id, i.brand, i.product_code, i.product_name, i.variant_name, i.dimension,
+    i.package_type, i.drive_file_id, i.qty, i.supplier, i.is_manual, i.batch_number, i.exp_code,
+    r.number, r.request_date, r.requester_name, r.division, r.status, r.printed_at, r.delivered_at, r.created_at,
+    (SELECT group_concat(a.role || ':' || a.decision) FROM approvals a WHERE a.request_id = r.id) AS approval_summary
+  FROM request_items i JOIN requests r ON r.id = i.request_id`;
+
+app.get('/api/history', auth(), (req, res) => {
+  const where = [], args = [];
+  const q = str(req.query.q, 100);
+  if (q) {
+    for (const w of q.split(/\s+/).filter(Boolean).slice(0, 6)) {
+      where.push('(i.product_name LIKE ? OR i.product_code LIKE ? OR i.brand LIKE ? OR i.variant_name LIKE ? OR r.number LIKE ? OR r.requester_name LIKE ? OR r.division LIKE ?)');
+      args.push(...Array(7).fill(`%${w}%`));
+    }
+  }
+  if (req.query.status) { where.push('r.status = ?'); args.push(str(req.query.status, 20)); }
+  else if (!req.query.all) where.push(`r.status IN ${ACTIVE_STATUSES}`);
+  if (req.query.from) { where.push('r.request_date >= ?'); args.push(str(req.query.from, 10)); }
+  if (req.query.to) { where.push('r.request_date <= ?'); args.push(str(req.query.to, 10)); }
+  if (req.query.division) { where.push('r.division = ?'); args.push(str(req.query.division, 100)); }
+  if (req.query.variant_id) { where.push('i.variant_id = ?'); args.push(Number(req.query.variant_id)); }
+  const rows = db.prepare(`${HISTORY_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY r.request_date DESC, r.id DESC, i.id LIMIT ?`).all(...args, Math.min(Number(req.query.limit) || 300, 1000));
+  res.json(rows);
+});
+
+// Returns, for every item about to be requested, earlier active orders of the same design in the last N days.
+function findPreviousOrders(item, days, excludeRequestId = 0) {
+  const since = new Date(Date.now() + 7 * 3600e3 - days * 864e5).toISOString().slice(0, 10);
+  const cond = [], args = [];
+  if (item.variant_id) {
+    const v = db.prepare('SELECT drive_file_id FROM variants WHERE id = ?').get(Number(item.variant_id));
+    cond.push('i.variant_id = ?'); args.push(Number(item.variant_id));
+    if (v?.drive_file_id) { cond.push("(i.drive_file_id <> '' AND i.drive_file_id = ?)"); args.push(v.drive_file_id); }
+  } else if (item.product_name) {
+    cond.push('(lower(trim(i.product_name)) = lower(trim(?)) AND lower(trim(i.brand)) = lower(trim(?)))');
+    args.push(str(item.product_name, 200), str(item.brand, 100));
+  }
+  if (!cond.length) return [];
+  return db.prepare(`${HISTORY_SELECT} WHERE (${cond.join(' OR ')}) AND r.status IN ${ACTIVE_STATUSES} AND r.request_date >= ? AND r.id <> ?
+    ORDER BY r.request_date DESC, r.id DESC LIMIT 10`).all(...args, since, excludeRequestId);
+}
+app.post('/api/requests/check-duplicates', auth(), (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.body.days, 10) || 60, 1), 365);
+  const items = Array.isArray(req.body.items) ? req.body.items.slice(0, 100) : [];
+  res.json({ days, results: items.map((it, index) => ({ index, matches: findPreviousOrders(it, days) })) });
 });
 
 app.post('/api/requests/:id/cancel', auth(), (req, res) => {
@@ -779,7 +850,7 @@ app.get('/api/reports/pdf', auth('admin', ...APPROVER_ROLES), wrap(async (req, r
 }));
 
 app.get('/api/stats', auth(), (req, res) => {
-  const mine = req.user.role === 'user' ? 'WHERE requester_id = ' + Number(req.user.id) : '';
+  const mine = req.query.mine ? 'WHERE requester_id = ' + Number(req.user.id) : '';
   const byStatus = Object.fromEntries(db.prepare(`SELECT status, COUNT(*) n FROM requests ${mine} GROUP BY status`).all().map(r => [r.status, r.n]));
   res.json({
     byStatus,

@@ -25,11 +25,41 @@ const ICON = {
   logo: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4" fill="#99f6e4"/></svg>',
 };
 const STATUS = {
-  pending: 'Menunggu Persetujuan', approved: 'Disetujui', rejected: 'Ditolak', sent: 'Dikirim ke Vendor', done: 'Selesai', cancelled: 'Dibatalkan',
+  pending: 'Menunggu Persetujuan', approved: 'Disetujui', rejected: 'Ditolak', sent: 'Naik Cetak', done: 'Terkirim', cancelled: 'Dibatalkan',
 };
 const ROLE = { admin: 'Admin', user: 'User / Tim', manager_desain: 'Manager Desain', purchasing: 'Purchasing', desainer: 'Desainer' };
 const APPROVERS = ['desainer', 'purchasing'];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
+
+// Progress: Diajukan → ACC Desainer → ACC Purchasing → Naik Cetak → Terkirim
+function progressSteps(r) {
+  const ap = r.approvals ? Object.fromEntries(r.approvals.map(a => [a.role, a]))
+    : Object.fromEntries((r.approval_summary || '').split(',').filter(Boolean).map(x => { const [role, decision] = x.split(':'); return [role, { decision }]; }));
+  const st = a => (a?.decision === 'approved' ? 'done' : a?.decision === 'rejected' ? 'fail' : '');
+  const steps = [
+    { label: 'Diajukan', state: 'done', date: r.created_at || r.request_date, who: r.requester_name },
+    { label: 'ACC Desainer', state: st(ap.desainer), date: ap.desainer?.signed_at, who: ap.desainer?.user_name },
+    { label: 'ACC Purchasing', state: st(ap.purchasing), date: ap.purchasing?.signed_at, who: ap.purchasing?.user_name },
+    { label: 'Naik Cetak', state: r.printed_at || ['sent', 'done'].includes(r.status) ? 'done' : '', date: r.printed_at, who: r.printed_by },
+    { label: 'Terkirim', state: r.delivered_at || r.status === 'done' ? 'done' : '', date: r.delivered_at, who: r.delivered_by },
+  ];
+  const blocked = ['cancelled', 'rejected'].includes(r.status);
+  const i = steps.findIndex(x => !x.state);
+  if (i >= 0 && !blocked) steps[i].state = 'current';
+  if (blocked) steps.forEach(x => { if (!x.state) x.state = 'skip'; });
+  return steps;
+}
+function progressText(r) {
+  if (r.status === 'cancelled') return 'Dibatalkan';
+  if (r.status === 'rejected') return 'Ditolak';
+  if (r.status === 'done') return 'Terkirim';
+  const cur = progressSteps(r).find(x => x.state === 'current');
+  if (!cur) return STATUS[r.status] || r.status;
+  return { 'ACC Desainer': 'Menunggu ACC Desainer', 'ACC Purchasing': 'Menunggu ACC Purchasing', 'Naik Cetak': 'Siap naik cetak', 'Terkirim': 'Sedang dicetak' }[cur.label] || cur.label;
+}
+const progressMini = r => `<div class="pmini"><span class="pm-dots">${progressSteps(r).map(x => `<span class="pm ${x.state}" title="${esc(x.label)}"></span>`).join('')}</span><span class="pm-l">${esc(progressText(r))}</span></div>`;
+const progressFull = r => `<ol class="pfull">${progressSteps(r).map(x => `<li class="${x.state}"><span class="pf-dot">${x.state === 'done' ? '✓' : x.state === 'fail' ? '✕' : ''}</span>
+  <span class="pf-t"><b>${esc(x.label)}</b>${x.date && x.state !== 'skip' ? `<small>${fmtDate(x.date, x.date.length > 10)}</small>` : ''}${x.who && x.state === 'done' ? `<small>${esc(x.who)}</small>` : ''}</span></li>`).join('')}</ol>`;
 const PKG = { sticker: 'Sticker / Label', flexible: 'Flexible Packaging', box: 'Box / Karton', other: 'Lainnya' };
 const PKG_SHORT = { sticker: 'Sticker', flexible: 'Flexible', box: 'Box', other: 'Lainnya' };
 const pkgBadge = (t, short = false) => t ? `<span class="pkg ${esc(t)}" title="${esc(PKG[t] || t)}">${esc((short ? PKG_SHORT : PKG)[t] || t)}</span>` : '';
@@ -124,7 +154,8 @@ const state = { user: undefined, suppliers: [], brands: null, stats: null };
 const ROUTES = {
   '': { title: 'Beranda', view: viewHome },
   'baru': { title: 'Buat Request', view: viewNewRequest },
-  'request': { title: 'Daftar Request', view: viewRequests },
+  'request': { title: 'Semua Request', view: viewRequests },
+  'riwayat': { title: 'Riwayat Pemesanan', view: viewHistory },
   'persetujuan': { title: 'Persetujuan', view: viewApprovals, roles: APPROVERS },
   'generator': { title: 'Generator Batch & Exp', view: viewGenerator, roles: ['admin'] },
   'katalog': { title: 'Katalog Sticker', view: viewCatalog },
@@ -162,6 +193,7 @@ async function render() {
 }
 
 const NAV_ICON = {
+  riwayat: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   '': '<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/>',
   baru: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/>',
   request: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
@@ -179,7 +211,7 @@ const LOGO_ICON = '<img src="/brand/sainsgo-icon.png" alt="" class="logo-img">';
 function renderShell(app) {
   const u = state.user;
   const links = [
-    ['', 'Beranda'], ['baru', 'Buat Request'], ['request', u.role === 'user' ? 'Request Saya' : 'Semua Request'],
+    ['', 'Beranda'], ['baru', 'Buat Request'], ['request', 'Semua Request'], ['riwayat', 'Riwayat Pemesanan'],
     ...(APPROVERS.includes(u.role) ? [['persetujuan', 'Persetujuan <span class="count hidden" id="cnt-ap"></span>']] : []),
     ...(u.role === 'admin' ? [['generator', 'Generator Batch & Exp']] : []),
     ['katalog', u.role === 'admin' ? 'Kelola Katalog' : 'Katalog Sticker'],
@@ -286,17 +318,15 @@ async function viewHome(main) {
 
 function requestTable(rows, { showRequester = true } = {}) {
   if (!rows.length) return '<div class="empty">Belum ada request.</div>';
-  return `<div class="table-wrap"><table class="t cards-sm"><thead><tr><th>No. Request</th><th>Tanggal</th>${showRequester ? '<th>Pemohon</th>' : ''}<th>Isi</th><th>Supplier</th><th>Persetujuan</th><th>Status</th></tr></thead><tbody>
+  return `<div class="table-wrap"><table class="t cards-sm"><thead><tr><th>No. Request</th><th>Tanggal</th>${showRequester ? '<th>Pemohon</th>' : ''}<th>Isi</th><th>Supplier</th><th>Progress</th></tr></thead><tbody>
   ${rows.map(r => {
-    const ap = Object.fromEntries((r.approval_summary || '').split(',').filter(Boolean).map(x => x.split(':')));
     return `<tr class="click" data-id="${r.id}" tabindex="0">
       <td class="cell-head"><b class="mono">${esc(r.number)}</b> <span class="only-sm">${badge(r.status)}</span></td>
       <td data-label="Tanggal">${fmtDate(r.request_date)}</td>
       ${showRequester ? `<td data-label="Pemohon">${esc(r.requester_name)}<div class="muted small">${esc(r.division || '')}</div></td>` : ''}
       <td data-label="Isi">${fmtNum(r.item_count)} item · ${fmtNum(r.total_qty)} pcs<div class="muted small">${esc((r.brands || '').replace(/,/g, ', '))}</div></td>
       <td data-label="Supplier" class="small">${esc((r.suppliers || '').replace(/,/g, ', '))}</td>
-      <td data-label="Persetujuan" class="small"><span class="ap-dots">${APPROVERS.map(a => `<span class="ap-dot ${ap[a] || ''}" title="${ROLE[a]}: ${ap[a] === 'approved' ? 'disetujui' : ap[a] === 'rejected' ? 'ditolak' : 'belum'}">${ROLE[a].split(' ')[0]}</span>`).join('')}</span></td>
-      <td class="hide-sm">${badge(r.status)}</td></tr>`;
+      <td data-label="Progress">${progressMini(r)}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 function bindRequestRows(root) {
@@ -307,11 +337,26 @@ function bindRequestRows(root) {
 }
 
 // ---------------- sticker picker (shared) ----------------
+const daysAgo = d => Math.round((new Date(todayStr()) - new Date(String(d).slice(0, 10))) / 864e5);
+function lastOrderInfo(lo) {
+  if (!lo) return '<div class="small muted">Belum pernah dipesan lewat aplikasi.</div>';
+  const n = daysAgo(lo.request_date);
+  const when = n <= 0 ? 'hari ini' : n === 1 ? 'kemarin' : `${n} hari lalu`;
+  return `<div class="last-order ${n <= 30 ? 'recent' : ''}">🕑 Terakhir dipesan <b>${when}</b> (${fmtDate(lo.request_date)}) · ${fmtNum(lo.qty)} pcs · ${esc(lo.requester_name)}${lo.division ? ' · ' + esc(lo.division) : ''} · <span class="badge ${esc(lo.status)}">${esc(STATUS[lo.status] || lo.status)}</span></div>`;
+}
+function dupList(matches) {
+  return matches.map(m => `<li><a href="#" data-open-req="${m.request_id}"><b class="mono">${esc(m.number)}</b></a> · ${fmtDate(m.request_date)} (${daysAgo(m.request_date) <= 0 ? 'hari ini' : daysAgo(m.request_date) + ' hari lalu'})
+    · ${fmtNum(m.qty)} pcs · ${esc(m.requester_name)}${m.division ? ' · ' + esc(m.division) : ''} · <b>${esc(progressText(m))}</b></li>`).join('');
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-open-req]');
+  if (a) { e.preventDefault(); openRequest(a.dataset.openReq); }
+});
 /**
  * Renders brand chips → search → product grid → variant cards into `root`.
  * Calls onPick({product, variant}) whenever the selected variant changes.
  */
-async function stickerPicker(root, onPick) {
+async function stickerPicker(root, onPick, opts = {}) {
   const brands = await getBrands();
   const st = { brand: '', q: '', product: null, variant: null, timer: null, seq: 0 };
   root.innerHTML = `
@@ -337,12 +382,13 @@ async function stickerPicker(root, onPick) {
     if (st.type) params.set('package_type', st.type);
     const rows = await api('/api/products?' + params);
     if (my !== st.seq) return;
+    if (opts.onSearch) opts.onSearch(st.q, rows.length);
     resultsEl.innerHTML = rows.length ? rows.map(p => `
       <button class="pcard ${st.product?.id === p.id ? 'on' : ''}" data-p="${p.id}" type="button">
         <div class="img" ${bgThumb(p.thumb_file_id, 300)}><span class="pkgs">${(p.package_types || '').split(',').filter(Boolean).map(t => pkgBadge(t, true)).join('')}</span></div>
         <div class="b"><span class="code">${esc(p.code || p.brand_name)}</span><span class="nm">${esc(p.name)}</span>
         <span class="sz">${esc((p.dimensions || '').split(' | ').slice(0, 2).join(' · ') || '—')}${p.variant_count > 1 ? ` · ${p.variant_count} variasi` : ''}</span></div>
-      </button>`).join('') : '<div class="muted small">Tidak ada sticker yang cocok. Coba kata kunci lain atau pilih brand lain.</div>';
+      </button>`).join('') : `<div class="callout warn small" style="grid-column:1/-1">Tidak ada yang cocok dengan “${esc(st.q)}”. Coba kata kunci lain (nama produk, kode, rasa/aroma) atau brand lain.${opts.manualHint ? ' Jika memang belum ada di database, gunakan <b>Input manual</b> di atas.' : ''}</div>`;
   }
   async function showProduct(id) {
     const p = await api('/api/products/' + id);
@@ -361,6 +407,7 @@ async function stickerPicker(root, onPick) {
             <div class="row">${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : '<span class="badge pending">Ukuran belum tercatat</span>'}
               ${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}${v.tags.map(t => `<span class="tag">${esc(t)}</span>`).join(' ')}</div>
             <div class="fname">${ICON.pdf} ${esc(v.file_name || '-')}</div>
+            ${lastOrderInfo(v.last_order)}
             ${v.drive_link ? `<div><a class="small" href="${esc(v.drive_link)}" target="_blank" rel="noopener">${ICON.drive} Buka file mentah</a></div>` : ''}
           </div>
         </div>`).join('') || '<div class="callout warn">Produk ini belum memiliki file sticker.</div>'}</div>`;
@@ -383,6 +430,7 @@ async function stickerPicker(root, onPick) {
   await load();
   return {
     reset() { st.product = null; st.variant = null; varEl.innerHTML = ''; $$('.pcard', resultsEl).forEach(c => c.classList.remove('on')); onPick({}); },
+    open(id) { return showProduct(id).then(() => varEl.scrollIntoView({ behavior: 'smooth', block: 'start' })); },
   };
 }
 
@@ -400,12 +448,14 @@ async function viewNewRequest(main) {
     <div class="stack">
       <div class="seg" role="tablist" aria-label="Cara memilih produk">
         <button type="button" role="tab" class="on" data-mode="db" aria-selected="true">Pilih dari database</button>
-        <button type="button" role="tab" data-mode="manual" aria-selected="false">✍️ Input manual (belum ada di daftar)</button>
+        <button type="button" role="tab" data-mode="manual" aria-selected="false" disabled title="Cari dulu di database">🔒 Input manual</button>
       </div>
+      <div class="small muted" id="seg-hint">Wajib cari dulu di database. <b>Input manual</b> terbuka setelah Anda mencari dan produknya memang tidak ada.</div>
       <div class="card card-pad stack" id="picker"></div>
       <div class="card card-pad stack hidden" id="manual">
         <div class="step"><span class="num">1</span><h3>Produk yang belum ada di database</h3></div>
-        <div class="callout small">Isi nama brand dan nama produk yang ingin dicetak. Admin/desainer akan menyiapkan file cetaknya.</div>
+        <div class="callout warn small"><b>Hanya untuk produk yang TIDAK ADA di database.</b> Pastikan sudah mencari dengan beberapa kata kunci (nama produk, kode, aroma/rasa).
+          Produk dari database lebih cepat diproses karena file cetak & batch/expired-nya otomatis. Admin/desainer akan menyiapkan file untuk input manual.</div>
         <div class="grid2">
           <label class="f">Nama brand<input class="input" id="m-brand" list="dl-brand" placeholder="mis. Maskit, atau brand baru" autocomplete="off"></label>
           <label class="f">Nama produk<input class="input" id="m-name" placeholder="mis. Baby Body Wash Calamine 500mL" autocomplete="off"></label>
@@ -414,11 +464,14 @@ async function viewNewRequest(main) {
           <label class="f">Variasi / volume <span class="hint">(opsional)</span><input class="input" id="m-var" placeholder="mis. 500 mL, rasa vanilla"></label>
           <label class="f">Link file / referensi <span class="hint">(opsional)</span><input class="input" id="m-link" placeholder="Link Google Drive bila ada"></label>
         </div>
+        <div id="m-sugg"></div>
+        <label class="confirm"><input type="checkbox" id="m-confirm"><span>Saya sudah mencari di database dan produk ini <b>tidak ada</b>.</span></label>
         <datalist id="dl-brand">${brands.map(b => `<option value="${esc(b.name)}">`).join('')}</datalist>
       </div>
       <div class="card card-pad stack" id="item-form">
         <div class="step"><span class="num" id="qty-step">4</span><h3>Jumlah & supplier</h3></div>
         <div id="sel-summary" class="callout">Belum ada sticker dipilih.</div>
+        <div id="dup-warn"></div>
         <div class="grid3">
           <label class="f">Jumlah cetak (pcs)<input class="input" id="qty" type="number" min="1" step="1" inputmode="numeric" placeholder="mis. 1000"></label>
           <label class="f">Supplier<select class="input" id="supplier"><option value="">— Pilih supplier —</option>${state.suppliers.map(s => `<option>${esc(s)}</option>`).join('')}</select></label>
@@ -447,21 +500,66 @@ async function viewNewRequest(main) {
       </form>
     </div>
   </div>`;
-  const picker = await stickerPicker($('#picker'), s => { sel = s; refreshSel(); });
+  let searched = false;
+  const picker = await stickerPicker($('#picker'), s => { sel = s; refreshSel(); checkDup(); }, {
+    manualHint: true,
+    onSearch: (q, count) => {
+      if (searched || q.length < 3) return;
+      searched = true;
+      const mb = $('.seg button[data-mode=manual]');
+      mb.disabled = false; mb.removeAttribute('title'); mb.textContent = '✍️ Input manual (tidak ada di database)';
+      $('#seg-hint').innerHTML = count ? 'Produk ditemukan? Pilih dari hasil di bawah. Input manual hanya bila benar-benar tidak ada.' : 'Tidak ditemukan? Coba kata kunci lain, atau gunakan <b>Input manual</b>.';
+    },
+  });
   const supplier = $('#supplier');
+  // warn about earlier orders of the same design (avoid double order)
+  let dupSeq = 0;
+  async function checkDup() {
+    const box = $('#dup-warn');
+    const item = mode === 'manual' ? (() => { const m = manualVals(); return m.brand && m.product_name ? { brand: m.brand, product_name: m.product_name } : null; })()
+      : sel.variant ? { variant_id: sel.variant.id } : null;
+    if (!item) { box.innerHTML = ''; return; }
+    const my = ++dupSeq;
+    const r = await api('/api/requests/check-duplicates', { method: 'POST', body: { items: [item] } }).catch(() => null);
+    if (my !== dupSeq || !r) return;
+    const m = r.results[0].matches;
+    box.innerHTML = m.length ? `<div class="callout warn"><b>⚠️ Desain ini sudah pernah dipesan dalam ${r.days} hari terakhir.</b> Cek dulu agar tidak order ganda:<ul class="dup">${dupList(m.slice(0, 4))}</ul></div>` : '';
+  }
   const manualVals = () => ({
     brand: $('#m-brand').value.trim(), product_name: $('#m-name').value.trim(), package_type: $('#m-type').value,
     dimension: $('#m-dim').value.trim(), variant_name: $('#m-var').value.trim(), drive_link: $('#m-link').value.trim(),
   });
   $$('.seg button').forEach(b => b.onclick = () => {
+    if (b.disabled) return;
     mode = b.dataset.mode;
     $$('.seg button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
     $('#picker').classList.toggle('hidden', mode !== 'db');
     $('#manual').classList.toggle('hidden', mode !== 'manual');
     $('#qty-step').textContent = mode === 'db' ? '4' : '2';
-    refreshSel();
+    refreshSel(); checkDup();
   });
-  ['m-brand', 'm-name', 'm-type', 'm-dim', 'm-var'].forEach(id => { $('#' + id).oninput = refreshSel; $('#' + id).onchange = refreshSel; });
+  // While typing a manual product, suggest similar catalog products so the user picks those instead.
+  let sugT;
+  const suggest = () => {
+    clearTimeout(sugT);
+    sugT = setTimeout(async () => {
+      const m = manualVals();
+      const q = m.product_name.split(/\s+/).filter(w => w.length > 2).slice(0, 3).join(' ');
+      if (q.length < 3) { $('#m-sugg').innerHTML = ''; return; }
+      const rows = await api('/api/products?limit=6&q=' + encodeURIComponent(q)).catch(() => []);
+      $('#m-sugg').innerHTML = rows.length ? `<div class="sugg"><div class="small"><b>Mirip dengan produk di database</b> — pilih salah satu bila sama:</div>
+        <div class="sugg-list">${rows.map(p => `<button type="button" class="sugg-item" data-sp="${p.id}"><span class="thumb" ${bgThumb(p.thumb_file_id, 300)}></span>
+          <span><span class="small muted">${esc(p.brand_name)}</span><b>${esc(p.code ? p.code + '. ' : '')}${esc(p.name)}</b></span></button>`).join('')}</div></div>` : '';
+      $$('[data-sp]', $('#m-sugg')).forEach(b => b.onclick = () => {
+        $('.seg button[data-mode=db]').click();
+        picker.open(b.dataset.sp);
+      });
+    }, 300);
+  };
+  ['m-brand', 'm-name', 'm-type', 'm-dim', 'm-var', 'm-confirm'].forEach(id => { $('#' + id).oninput = refreshSel; $('#' + id).onchange = refreshSel; });
+  $('#m-name').addEventListener('input', suggest);
+  $('#m-name').addEventListener('change', checkDup);
+  $('#m-brand').addEventListener('change', checkDup);
   supplier.onchange = () => { $('#sup-other-wrap').classList.toggle('hidden', supplier.value !== 'Lainnya'); refreshSel(); };
   $('#qty').oninput = refreshSel;
   $('#sup-other').oninput = refreshSel;
@@ -469,10 +567,10 @@ async function viewNewRequest(main) {
     let ready = false;
     if (mode === 'manual') {
       const m = manualVals();
-      ready = !!(m.brand && m.product_name);
+      ready = !!(m.brand && m.product_name && $('#m-confirm').checked);
       $('#sel-summary').innerHTML = ready ? `<div><span class="tag manual">Input manual</span> <b>${esc(m.brand)} · ${esc(m.product_name)}</b>
         <div class="row" style="margin-top:4px">${pkgBadge(m.package_type)}${m.dimension ? `<span class="dim">${ICON.ruler} ${esc(m.dimension)}</span>` : ''}${m.variant_name ? `<span class="badge">${esc(m.variant_name)}</span>` : ''}</div></div>`
-        : 'Isi nama brand dan nama produk di atas.';
+        : m.brand && m.product_name ? 'Centang konfirmasi bahwa produk ini tidak ada di database.' : 'Isi nama brand dan nama produk di atas.';
     } else {
       const v = sel.variant, p = sel.product;
       ready = !!v;
@@ -487,15 +585,16 @@ async function viewNewRequest(main) {
     const common = { qty: +$('#qty').value, supplier: supplier.value, supplier_other: $('#sup-other').value.trim(), notes: $('#item-note').value.trim() };
     if (mode === 'manual') {
       const m = manualVals();
-      cart.push({ ...common, manual: true, ...m,
+      cart.push({ ...common, manual: true, manual_confirmed: true, ...m,
         _v: { name: m.variant_name || 'Desain baru', dimension: m.dimension, package_type: m.package_type, drive_file_id: '' },
         _p: { brand_name: m.brand, code: '', name: m.product_name }, _manual: true });
       ['m-name', 'm-dim', 'm-var', 'm-link'].forEach(id => ($('#' + id).value = ''));
+      $('#m-confirm').checked = false; $('#m-sugg').innerHTML = '';
     } else {
       cart.push({ ...common, variant_id: sel.variant.id, _v: sel.variant, _p: sel.product });
       picker.reset();
     }
-    $('#qty').value = ''; $('#item-note').value = '';
+    $('#qty').value = ''; $('#item-note').value = ''; $('#dup-warn').innerHTML = '';
     refreshSel(); renderCart(); toast('Ditambahkan ke daftar request');
     $('#cart').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
@@ -519,6 +618,23 @@ async function viewNewRequest(main) {
     const body = Object.fromEntries(new FormData(e.target));
     body.items = cart.map(({ _v, _p, _manual, ...rest }) => rest);
     await busy($('#submit'), async () => {
+      const chk = await api('/api/requests/check-duplicates', { method: 'POST', body: { items: body.items } });
+      const hits = chk.results.filter(x => x.matches.length);
+      if (hits.length) {
+        const ok = await new Promise(resolve => {
+          const mm = modal('⚠️ Kemungkinan order ganda', `
+            <p style="margin:0">Desain berikut sudah dipesan dalam ${chk.days} hari terakhir. Pastikan tidak memesan dua kali.</p>
+            ${hits.map(h => { const c = cart[h.index]; return `<div class="card card-pad"><b>${esc(c._p.brand_name)} · ${esc(c._p.code ? c._p.code + '. ' : '')}${esc(c._p.name)}</b>
+              <div class="small muted">${esc(c._v.name)} · ${fmtNum(c.qty)} pcs</div><ul class="dup">${dupList(h.matches.slice(0, 4))}</ul></div>`; }).join('')}
+            <label class="confirm"><input type="checkbox" id="dup-ok"><span>Saya sudah mengecek, ini <b>bukan order ganda</b>.</span></label>`,
+          { wide: true, foot: '<button class="btn" data-close id="dup-cancel">Kembali & cek ulang</button><button class="btn primary" id="dup-go" disabled>Tetap kirim request</button>' });
+          $('#dup-ok', mm.el).onchange = e => ($('#dup-go', mm.el).disabled = !e.target.checked);
+          $('#dup-go', mm.el).onclick = () => { mm.close(); resolve(true); };
+          mm.el.addEventListener('click', e => { if (e.target === mm.el || e.target.closest('[data-close]')) resolve(false); });
+        });
+        if (!ok) return;
+        body.notes = [body.notes, '(Sudah dicek: bukan order ganda)'].filter(Boolean).join(' ');
+      }
       const r = await api('/api/requests', { method: 'POST', body });
       toast(`Request ${r.number} terkirim`);
       location.hash = '#/request';
@@ -527,18 +643,61 @@ async function viewNewRequest(main) {
   };
 }
 
+// ---------------- shared order history ----------------
+async function viewHistory(main) {
+  const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  main.innerHTML = `
+  <div class="page-head"><div><h1>Riwayat Pemesanan</h1><p>Semua sticker & kemasan yang dipesan oleh seluruh tim. Cek di sini sebelum memesan agar tidak order ganda.</p></div>
+    <a class="btn primary" href="#/baru">+ Buat Request</a></div>
+  <div class="card">
+    <div class="card-head"><div class="row">
+      <div class="search" style="min-width:260px">${ICON.search}<input class="input" id="h-q" placeholder="Cari produk, kode, brand, pemesan…" value="${esc(params.get('q') || '')}"></div>
+      <select class="input" id="h-status" style="width:auto"><option value="">Semua (aktif)</option>
+        <option value="pending">Menunggu ACC</option><option value="approved">Disetujui, siap cetak</option><option value="sent">Naik Cetak</option><option value="done">Terkirim</option>
+        <option value="rejected">Ditolak</option><option value="cancelled">Dibatalkan</option></select>
+      <select class="input" id="h-division" style="width:auto"><option value="">Semua tim</option>${(state.divisions || []).map(d => `<option>${esc(d)}</option>`).join('')}</select>
+      <input class="input" type="date" id="h-from" style="width:auto" title="Dari tanggal"><input class="input" type="date" id="h-to" style="width:auto" title="Sampai tanggal">
+    </div></div>
+    <div id="h-list"></div>
+  </div>`;
+  let t;
+  const load = async () => {
+    const p = new URLSearchParams();
+    for (const [k, id] of [['q', 'h-q'], ['status', 'h-status'], ['division', 'h-division'], ['from', 'h-from'], ['to', 'h-to']]) if ($('#' + id).value) p.set(k, $('#' + id).value);
+    const rows = await api('/api/history?' + p);
+    $('#h-list').innerHTML = rows.length ? `<div class="table-wrap"><table class="t cards-sm"><thead><tr><th>Tanggal</th><th>Sticker / Kemasan</th><th>Jumlah</th><th>Dipesan oleh</th><th>Supplier</th><th>Progress</th></tr></thead><tbody>
+      ${rows.map(h => `<tr class="click" data-id="${h.request_id}" tabindex="0">
+        <td class="cell-head"><span><b>${fmtDate(h.request_date)}</b><div class="small muted mono" style="white-space:nowrap">${esc(h.number)}</div></span>${daysAgo(h.request_date) <= 7 ? `<span class="badge pending">${daysAgo(h.request_date) <= 0 ? 'Hari ini' : daysAgo(h.request_date) + ' hari lalu'}</span>` : ''}</td>
+        <td data-label="Produk"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${h.drive_file_id ? `<span class="thumb" ${bgThumb(h.drive_file_id, 300)}></span>` : '<span class="thumb thumb-manual">✍️</span>'}
+          <div><div class="small muted">${esc(h.brand)} ${pkgBadge(h.package_type, true)} ${h.is_manual ? '<span class="tag manual">Manual</span>' : ''}</div>
+          <b>${esc(h.product_code ? h.product_code + '. ' : '')}${esc(h.product_name)}</b><div class="small">${esc(h.variant_name || '')}${h.dimension ? ' · ' + esc(h.dimension) : ''}</div></div></div></td>
+        <td data-label="Jumlah"><b>${fmtNum(h.qty)}</b> pcs</td>
+        <td data-label="Dipesan oleh">${esc(h.requester_name)}<div class="small muted">${esc(h.division || '')}</div></td>
+        <td data-label="Supplier" class="small">${esc(h.supplier)}</td>
+        <td data-label="Progress">${progressMini(h)}</td></tr>`).join('')}</tbody></table></div>
+      ${rows.length >= 300 ? '<div class="small muted" style="padding:10px 14px">Menampilkan 300 baris terbaru — persempit pencarian.</div>' : ''}`
+      : '<div class="empty">Tidak ada riwayat yang cocok.</div>';
+    bindRequestRows($('#h-list'));
+  };
+  ['h-status', 'h-division', 'h-from', 'h-to'].forEach(id => ($('#' + id).onchange = load));
+  $('#h-q').oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
+  await load();
+}
+
 // ---------------- requests list ----------------
 async function viewRequests(main) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   main.innerHTML = `
-  <div class="page-head"><div><h1>${state.user.role === 'user' ? 'Request Saya' : 'Semua Request'}</h1><p>Klik baris untuk melihat detail, persetujuan, dan mengunduh PDF.</p></div>
+  <div class="page-head"><div><h1>Semua Request Tim</h1><p>Semua tim bisa melihat request dan progresnya, supaya tidak terjadi order ganda. Klik baris untuk detail.</p></div>
     <a class="btn primary" href="#/baru">+ Buat Request</a></div>
   <div class="card">
     <div class="card-head">
       <div class="row">
         <div class="search" style="min-width:260px">${ICON.search}<input class="input" id="f-q" placeholder="Cari no. request, produk, pemohon…" value="${esc(params.get('q') || '')}"></div>
         <select class="input" id="f-status" style="width:auto"><option value="">Semua status</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${params.get('status') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <select class="input" id="f-division" style="width:auto"><option value="">Semua tim</option>${(state.divisions || []).map(d => `<option>${esc(d)}</option>`).join('')}</select>
         <input class="input" type="date" id="f-from" style="width:auto" title="Dari tanggal"><input class="input" type="date" id="f-to" style="width:auto" title="Sampai tanggal">
+        <label class="row small"><input type="checkbox" id="f-mine"> Hanya request saya</label>
       </div>
     </div>
     <div id="list"></div>
@@ -546,12 +705,13 @@ async function viewRequests(main) {
   let t;
   const load = async () => {
     const p = new URLSearchParams();
-    for (const [k, id] of [['q', 'f-q'], ['status', 'f-status'], ['from', 'f-from'], ['to', 'f-to']]) if ($('#' + id).value) p.set(k, $('#' + id).value);
+    for (const [k, id] of [['q', 'f-q'], ['status', 'f-status'], ['from', 'f-from'], ['to', 'f-to'], ['division', 'f-division']]) if ($('#' + id).value) p.set(k, $('#' + id).value);
+    if ($('#f-mine').checked) p.set('mine', 1);
     const rows = await api('/api/requests?' + p);
-    $('#list').innerHTML = requestTable(rows, { showRequester: state.user.role !== 'user' });
+    $('#list').innerHTML = requestTable(rows);
     bindRequestRows($('#list'));
   };
-  ['f-status', 'f-from', 'f-to'].forEach(id => $('#' + id).onchange = load);
+  ['f-status', 'f-from', 'f-to', 'f-division', 'f-mine'].forEach(id => $('#' + id).onchange = load);
   $('#f-q').oninput = () => { clearTimeout(t); t = setTimeout(load, 250); };
   await load();
 }
@@ -585,6 +745,8 @@ function renderRequestModal(m, r, reload) {
   const canPR = ['admin', 'purchasing'].includes(u.role);
   $('.modal-head h2', m.el).innerHTML = `${esc(r.number)} ${badge(r.status)}`;
   $('.modal-body', m.el).innerHTML = `
+    ${progressFull(r)}
+    ${r.delivered_note ? `<div class="callout ok small"><b>Catatan pengiriman:</b> ${esc(r.delivered_note)}</div>` : ''}
     <dl class="kv">
       <dt>Pemohon</dt><dd>${esc(r.requester_name)}${r.division ? ` · ${esc(r.division)}` : ''}</dd>
       <dt>Tanggal request</dt><dd>${fmtDate(r.request_date)}</dd>
@@ -614,7 +776,7 @@ function renderRequestModal(m, r, reload) {
           <div class="nm">${a ? esc(a.user_name) : '—'}<div class="small muted" style="font-weight:400">${a ? fmtDate(a.signed_at, true) : ''}${a?.decision === 'approved' && a.note ? ' · ' + esc(a.note) : ''}</div></div></div>`;
       }).join('')}</div>
     </div>
-    ${r.status === 'approved' && isAdmin ? '<div class="callout ok">Semua pihak sudah ACC & tanda tangan. Buat <b>Purchase Request</b> untuk tiap vendor di bawah, kirimkan ke vendor, lalu tandai “Dikirim ke Vendor”.</div>' : ''}
+    ${r.status === 'approved' && canPR ? '<div class="callout ok">Desainer & Purchasing sudah ACC. Buat <b>Purchase Request</b> untuk tiap vendor di bawah, kirim ke vendor, lalu tandai <b>Naik Cetak</b>.</div>' : ''}
     ${canPR ? `<div class="card card-pad stack">
       <div class="row between"><h3>Purchase Request ke vendor</h3>
         ${['approved', 'sent', 'done'].includes(r.status) ? `<div class="row">${suppliers.map(sp => `<button class="btn sm primary" data-pr="${esc(sp)}">+ PR ${esc(sp.replace(/^Lainnya:\s*/, ''))}</button>`).join('')}</div>`
@@ -632,8 +794,8 @@ function renderRequestModal(m, r, reload) {
   foot.push(`<a class="btn" href="/api/requests/${r.id}/pdf" target="_blank" rel="noopener">${ICON.pdf} Ringkasan PDF</a>`);
   if (suppliers.length > 1) foot.push(`<select class="input" id="pdf-sup" style="width:auto"><option value="">PDF per supplier…</option>${suppliers.map(s => `<option>${esc(s)}</option>`).join('')}</select>`);
   if (canSign) foot.push(`<button class="btn danger" id="rej">Tolak</button><button class="btn primary" id="sign">${mine ? 'Ubah' : 'ACC &'} Tanda Tangan</button>`);
-  if (isAdmin && r.status === 'approved') foot.push('<button class="btn primary" data-st="sent">Tandai Dikirim ke Vendor</button>');
-  if (isAdmin && r.status === 'sent') foot.push('<button class="btn primary" data-st="done">Tandai Selesai</button>');
+  if (canPR && r.status === 'approved') foot.push('<button class="btn primary" data-st="sent">Tandai Naik Cetak</button>');
+  if (canPR && ['sent', 'approved'].includes(r.status)) foot.push(`<button class="btn ${r.status === 'sent' ? 'accent' : ''}" data-st="done">Tandai Terkirim</button>`);
   if (isAdmin && ['rejected', 'approved'].includes(r.status)) foot.push('<button class="btn" id="reopen">Ajukan Ulang Persetujuan</button>');
   if ((isAdmin || r.requester_id === u.id) && r.status === 'pending') foot.push('<button class="btn danger" id="cancel">Batalkan Request</button>');
   let footEl = $('.modal-foot', m.el);
@@ -661,18 +823,24 @@ function renderRequestModal(m, r, reload) {
   });
   $$('[data-pr]', m.el).forEach(b => b.onclick = () => openPurchaseRequest(r, b.dataset.pr, reload));
   $('#rej', m.el)?.addEventListener('click', () => openReject(r, reload));
-  $$('[data-st]', footEl).forEach(b => b.onclick = () => busy(b, async () => {
-    const note = b.dataset.st === 'sent' ? prompt('Catatan pengiriman ke vendor (opsional):', '') : '';
-    if (note === null) return;
-    await api(`/api/requests/${r.id}/status`, { method: 'POST', body: { status: b.dataset.st, note } });
-    toast('Status diperbarui'); await reload(); refreshList();
-  }));
+  $$('[data-st]', footEl).forEach(b => b.onclick = () => {
+    const done = b.dataset.st === 'done';
+    const mm = modal(done ? 'Tandai Terkirim' : 'Tandai Naik Cetak', `
+      <p class="muted" style="margin:0">${done ? 'Isi bila barang hasil cetak sudah dikirim / diterima.' : 'Isi bila request sudah diteruskan ke vendor dan mulai dicetak.'}</p>
+      <div class="grid2"><label class="f">${done ? 'Tanggal terkirim' : 'Tanggal naik cetak'}<input class="input" type="date" id="st-date" value="${todayStr()}"></label>
+      <label class="f">Catatan <span class="hint">(opsional)</span><input class="input" id="st-note" placeholder="${done ? 'mis. diterima Tim Gudang, 2 koli' : 'mis. PR dikirim via WA'}"></label></div>`,
+    { foot: `<button class="btn" data-close>Batal</button><button class="btn primary" id="st-ok">${done ? 'Tandai Terkirim' : 'Tandai Naik Cetak'}</button>` });
+    $('#st-ok', mm.el).onclick = e => busy(e.target, async () => {
+      await api(`/api/requests/${r.id}/status`, { method: 'POST', body: { status: b.dataset.st, date: $('#st-date', mm.el).value, note: $('#st-note', mm.el).value } });
+      mm.close(); toast('Progress diperbarui'); await reload(); refreshList();
+    });
+  });
   $('#reopen', m.el)?.addEventListener('click', e => { if (confirm('Hapus semua tanda tangan dan ajukan ulang persetujuan?')) busy(e.target, async () => { await api(`/api/requests/${r.id}/reopen`, { method: 'POST' }); await reload(); refreshList(); }); });
   $('#cancel', m.el)?.addEventListener('click', e => { if (confirm('Batalkan request ini?')) busy(e.target, async () => { await api(`/api/requests/${r.id}/cancel`, { method: 'POST' }); await reload(); refreshList(); }); });
 }
 function refreshList() {
   const n = route()[0];
-  if (['request', 'persetujuan', ''].includes(n)) ROUTES[n].view($('.main')).then(refreshCounts).catch(() => {});
+  if (['request', 'persetujuan', '', 'riwayat'].includes(n)) ROUTES[n].view($('.main')).then(refreshCounts).catch(() => {});
 }
 
 async function openSign(r, reload) {
