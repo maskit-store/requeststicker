@@ -200,7 +200,10 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
       };
       const u = fileUrl(it);
       if (u) linkLine('File siap cetak (klik)', u, true);
-      if (it.drive_link) linkLine('File master Google Drive', it.drive_link, false);
+      if (it.drive_link) linkLine(it.is_manual ? 'Link file / referensi' : 'File master Google Drive', it.drive_link, false);
+      if (!u && !it.drive_link) {
+        doc.font('Helvetica-Oblique').fontSize(8.3).fillColor(C.muted).text('File cetak menyusul (desain baru, belum ada di database).', L + 14, doc.y, { width: W - 14 });
+      }
       doc.moveDown(0.25);
     });
     doc.fillColor(C.ink);
@@ -220,7 +223,7 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   const ap = role => (request.approvals || []).find(a => a.role === role && a.decision === 'approved');
   const sigs = [
     { h: 'Dibuat oleh,', role: 'Admin', name: pr.created_by_name, sig: creatorSignature },
-    { h: 'Diperiksa oleh,', role: 'Manager Desain', name: ap('manager_desain')?.user_name, sig: ap('manager_desain')?.signature },
+    { h: 'Diperiksa oleh,', role: 'Desainer', name: ap('desainer')?.user_name, sig: ap('desainer')?.signature },
     { h: 'Disetujui oleh,', role: 'Purchasing', name: ap('purchasing')?.user_name, sig: ap('purchasing')?.signature },
     { h: 'Konfirmasi Vendor,', role: pr.vendor_name, name: '', sig: null },
   ];

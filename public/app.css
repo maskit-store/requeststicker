@@ -391,3 +391,17 @@ table.t tr.click:hover td { background: #f7fcfb; }
 @media (max-width: 640px) {
   .modal-foot > .btn { white-space: normal; line-height: 1.25; }
 }
+
+/* request form: database / manual switch */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: #fff; border: 1.5px solid var(--line); border-radius: 14px; padding: 4px; box-shadow: var(--shadow); }
+.seg button { border: 0; background: none; border-radius: 10px; padding: 10px 12px; font-weight: 700; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--tosca-600); color: #fff; }
+.seg button[data-mode=manual].on { background: var(--yellow); color: var(--yellow-ink); }
+.tag.manual { background: var(--yellow-soft); color: #8a5a00; }
+.thumb-manual { display: grid; place-items: center; font-size: 24px; background: var(--yellow-soft); cursor: default; }
+.approvals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .seg { grid-template-columns: 1fr; } .approvals { grid-template-columns: minmax(0, 1fr); } }
+
+/* keep "(opsional)" hints on the same line as their label */
+label.f { display: block; }
+label.f > .input, label.f > select, label.f > textarea, label.f > input { display: block; margin-top: 5px; }

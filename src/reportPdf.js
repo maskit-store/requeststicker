@@ -3,7 +3,7 @@ const { getThumbnail, imageKind } = require('./thumbs');
 const PACKAGE_LABEL = { sticker: 'Sticker / Label', flexible: 'Flexible Packaging', box: 'Box / Karton', other: 'Lainnya' };
 
 const ROLE_LABEL = { desainer: 'Desainer', manager_desain: 'Manager Desain', purchasing: 'Purchasing' };
-const APPROVER_ROLES = ['desainer', 'manager_desain', 'purchasing'];
+const APPROVER_ROLES = ['desainer', 'purchasing'];
 const STATUS_LABEL = {
   pending: 'Menunggu Persetujuan', approved: 'Disetujui', rejected: 'Ditolak',
   sent: 'Dikirim ke Vendor', done: 'Selesai', cancelled: 'Dibatalkan',
@@ -149,7 +149,7 @@ async function requestPdf(stream, { request, items, approvals, baseUrl, supplier
   doc.moveDown(0.8);
   doc.font('Helvetica-Bold').fontSize(10).fillColor(C.head).text('PERSETUJUAN (wajib ACC & TTD sebelum diteruskan ke vendor)', left, doc.y);
   const by = doc.y + 6;
-  const bw = (W - 20) / 3;
+  const bw = (W - 10 * (APPROVER_ROLES.length - 1)) / APPROVER_ROLES.length;
   APPROVER_ROLES.forEach((role, i) => {
     const a = approvals.find(x => x.role === role);
     const bx = left + i * (bw + 10);

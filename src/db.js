@@ -172,6 +172,7 @@ function ensureColumn(table, column, ddl) {
 ensureColumn('variants', 'package_type', "TEXT NOT NULL DEFAULT 'sticker'");
 ensureColumn('variants', 'package_type_manual', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('request_items', 'package_type', "TEXT DEFAULT ''");
+ensureColumn('request_items', 'is_manual', 'INTEGER NOT NULL DEFAULT 0');
 
 // ---- helpers ----
 function hashPassword(pw) {

@@ -69,7 +69,7 @@ test('purchase request: only after approval, numbered, formal PDF', async () => 
   assert.strictEqual(early.status, 400);
   assert.strictEqual((await u(`/api/requests/${r.id}/purchase-requests`, { supplier: 'Juke Sachet & Pouch' })).status, 403);
 
-  for (const who of ['desainer', 'manager', 'purchasing']) await (await login(who))(`/api/requests/${r.id}/approve`, { decision: 'approved', signature: SIG });
+  for (const who of ['desainer', 'purchasing']) await (await login(who))(`/api/requests/${r.id}/approve`, { decision: 'approved', signature: SIG });
 
   const draft = (await admin(`/api/requests/${r.id}/purchase-requests/draft?supplier=${encodeURIComponent('Juke Sachet & Pouch')}`)).data;
   assert.strictEqual(draft.vendor.name, 'Juke Sachet & Pouch');

@@ -14,6 +14,7 @@ const { purchasePdf } = require('./src/purchasePdf');
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 14;
 const SUPPLIERS = ['Kame', 'PWD', 'Jawara Pouch', 'Flexypack Sachet & Pouch', 'Juke Sachet & Pouch', 'Lainnya'];
+const DIVISIONS = ['Tim Produksi', 'Tim Packing', 'Tim Gudang', 'Desain', 'Purchasing', 'Marketing'];
 const ROLES = ['admin', 'user', 'manager_desain', 'purchasing', 'desainer'];
 const GEN_DIR = path.join(DATA_DIR, 'generated');
 const SRC_DIR = path.join(DATA_DIR, 'sources');
@@ -44,6 +45,10 @@ if (!getSetting('pkg_classified')) {
   });
   setSetting('pkg_classified', '1');
 }
+// Approval now needs Desainer + Purchasing only: re-evaluate requests still waiting.
+setImmediate(() => {
+  for (const r of db.prepare("SELECT id FROM requests WHERE status = 'pending'").all()) recomputeStatus(r.id);
+});
 // Request items created before packaging types existed: copy the type from the catalog.
 db.exec(`UPDATE request_items SET package_type = (SELECT v.package_type FROM variants v WHERE v.id = request_items.variant_id)
          WHERE (package_type IS NULL OR package_type = '') AND variant_id IS NOT NULL`);
@@ -121,7 +126,7 @@ app.post('/api/logout', (req, res) => {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
   res.json({ ok: true });
 });
-app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS }));
+app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS, divisions: DIVISIONS }));
 app.get('/api/me/signature', auth(), (req, res) => res.json({ signature: req.user.signature || null }));
 app.put('/api/me/signature', auth(), (req, res) => {
   const sig = String(req.body.signature || '');
@@ -476,10 +481,6 @@ app.post('/api/requests', auth(), (req, res) => {
   const requestDate = /^\d{4}-\d{2}-\d{2}$/.test(b.request_date || '') ? b.request_date : today();
   const neededDate = /^\d{4}-\d{2}-\d{2}$/.test(b.needed_date || '') ? b.needed_date : '';
   const rows = items.map((it, i) => {
-    const v = db.prepare(`SELECT v.*, p.code AS product_code, p.name AS product_name, b.name AS brand
-      FROM variants v JOIN products p ON p.id = v.product_id JOIN brands b ON b.id = p.brand_id
-      WHERE v.id = ? AND v.active = 1 AND p.active = 1`).get(Number(it.variant_id));
-    if (!v) throw bad(`Item #${i + 1}: sticker tidak ditemukan.`);
     const qty = parseInt(it.qty, 10);
     if (!(qty > 0) || qty > 10_000_000) throw bad(`Item #${i + 1}: jumlah cetak tidak valid.`);
     let supplier = str(it.supplier, 100);
@@ -489,7 +490,27 @@ app.post('/api/requests', auth(), (req, res) => {
       if (!other) throw bad(`Item #${i + 1}: tuliskan nama supplier lainnya.`);
       supplier = `Lainnya: ${other}`;
     }
-    return { v, qty, supplier, notes: str(it.notes, 500) };
+    const notes = str(it.notes, 500);
+    if (it.manual) {
+      // Product / brand typed by the user because it is not in the catalog yet.
+      const brand = str(it.brand, 100), productName = str(it.product_name, 200);
+      if (!brand) throw bad(`Item #${i + 1}: isi nama brand.`);
+      if (!productName) throw bad(`Item #${i + 1}: isi nama produk.`);
+      const link = str(it.drive_link, 1000);
+      const fileId = extractDriveId(link);
+      const v = {
+        id: null, brand, product_code: '', product_name: productName, name: str(it.variant_name, 200) || 'Desain baru',
+        dimension: str(it.dimension, 50), volume: str(it.volume, 50),
+        drive_file_id: fileId && /\/file\/d\/|[?&]id=/.test(link) ? fileId : '', drive_link: link,
+        package_type: PACKAGING_TYPES.includes(it.package_type) ? it.package_type : 'sticker',
+      };
+      return { v, qty, supplier, notes, manual: 1 };
+    }
+    const v = db.prepare(`SELECT v.*, p.code AS product_code, p.name AS product_name, b.name AS brand
+      FROM variants v JOIN products p ON p.id = v.product_id JOIN brands b ON b.id = p.brand_id
+      WHERE v.id = ? AND v.active = 1 AND p.active = 1`).get(Number(it.variant_id));
+    if (!v) throw bad(`Item #${i + 1}: sticker tidak ditemukan.`);
+    return { v, qty, supplier, notes, manual: 0 };
   });
   const id = tx(() => {
     const number = nextRequestNumber(requestDate);
@@ -498,9 +519,9 @@ app.post('/api/requests', auth(), (req, res) => {
       requestDate, neededDate, str(b.notes, 2000));
     const rid = Number(r.lastInsertRowid);
     const ins = db.prepare(`INSERT INTO request_items(request_id, variant_id, brand, product_code, product_name, variant_name, dimension, volume,
-      drive_file_id, drive_link, qty, supplier, notes, package_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-    for (const { v, qty, supplier, notes } of rows) {
-      ins.run(rid, v.id, v.brand, v.product_code, v.product_name, v.name, v.dimension, v.volume, v.drive_file_id || '', v.drive_link, qty, supplier, notes, v.package_type);
+      drive_file_id, drive_link, qty, supplier, notes, package_type, is_manual) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    for (const { v, qty, supplier, notes, manual } of rows) {
+      ins.run(rid, v.id, v.brand, v.product_code, v.product_name, v.name, v.dimension, v.volume, v.drive_file_id || '', v.drive_link || '', qty, supplier, notes, v.package_type, manual);
     }
     return rid;
   });
@@ -581,7 +602,7 @@ app.post('/api/requests/:id/status', auth('admin'), (req, res) => {
   const allowed = { sent: ['approved'], done: ['sent', 'approved'], cancelled: ['pending', 'rejected', 'approved'] };
   if (!allowed[status]) throw bad('Status tidak valid.');
   if (!allowed[status].includes(r.status)) {
-    if (status === 'sent') throw bad('Request wajib disetujui & ditandatangani Desainer, Manager Desain, dan Purchasing sebelum diteruskan ke vendor.');
+    if (status === 'sent') throw bad('Request wajib disetujui & ditandatangani Desainer dan Purchasing sebelum diteruskan ke vendor.');
     throw bad(`Tidak bisa mengubah status dari "${STATUS_LABEL[r.status]}" ke "${STATUS_LABEL[status]}".`);
   }
   db.prepare(`UPDATE requests SET status=?, status_note=?, updated_at=datetime('now') WHERE id=?`).run(status, str(req.body.note, 500), r.id);
@@ -681,7 +702,7 @@ app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (re
   const r = loadRequest(req.params.id);
   if (!r) throw new HttpError(404, 'Request tidak ditemukan.');
   if (!['approved', 'sent', 'done'].includes(r.status)) {
-    throw bad('Purchase Request hanya bisa dibuat setelah request disetujui & ditandatangani Desainer, Manager Desain, dan Purchasing.');
+    throw bad('Purchase Request hanya bisa dibuat setelah request disetujui & ditandatangani Desainer dan Purchasing.');
   }
   const b = req.body;
   const supplier = str(b.supplier, 100);
@@ -698,6 +719,7 @@ app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (re
       id: it.id, brand: it.brand, product_code: it.product_code, product_name: it.product_name, variant_name: it.variant_name,
       package_type: it.package_type, dimension: it.dimension, volume: it.volume, batch_number: it.batch_number, exp_code: it.exp_code,
       drive_link: it.drive_link, drive_file_id: it.drive_file_id, generated_uuid: it.generated_uuid, generated_name: it.generated_name,
+      is_manual: it.is_manual,
       qty, unit: str(o.unit, 20) || 'pcs', spec: str(o.spec, 300) || it.notes || '',
     };
   });
