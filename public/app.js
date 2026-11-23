@@ -32,6 +32,8 @@ const APPROVERS = ['desainer', 'purchasing'];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
 const UNDECIDED = 'Belum ditentukan';
 const supOption = sp => (sp === UNDECIDED ? 'Belum tahu — biar Purchasing yang pilih' : sp);
+const STICKER_SUPPLIERS = ['PWD', 'Kame'];
+const suppliersFor = pkg => (pkg === 'sticker' ? STICKER_SUPPLIERS : state.suppliers);
 const supHtml = sp => (sp === UNDECIDED ? '<span class="badge pending" title="Supplier akan dipilih tim Purchasing">Belum ditentukan · dipilih Purchasing</span>' : esc(sp));
 
 // Progress: Diajukan → ACC Desainer → ACC Purchasing → Naik Cetak → Terkirim
@@ -477,7 +479,7 @@ async function viewNewRequest(main) {
         <div id="dup-warn"></div>
         <div class="grid3">
           <label class="f">Jumlah cetak (pcs)<input class="input" id="qty" type="number" min="1" step="1" inputmode="numeric" placeholder="mis. 1000"></label>
-          <label class="f">Supplier<select class="input" id="supplier"><option value="">— Pilih supplier —</option>${state.suppliers.map(sp => `<option value="${esc(sp)}">${esc(supOption(sp))}</option>`).join('')}</select></label>
+          <label class="f">Supplier <span class="hint" id="sup-hint"></span><select class="input" id="supplier"><option value="">— Pilih supplier —</option>${state.suppliers.map(sp => `<option value="${esc(sp)}">${esc(supOption(sp))}</option>`).join('')}</select></label>
           <label class="f hidden" id="sup-other-wrap">Nama supplier lainnya<input class="input" id="sup-other" placeholder="Nama vendor"></label>
         </div>
         <label class="f">Catatan item <span class="hint">(opsional)</span><input class="input" id="item-note" placeholder="mis. bahan transparan, finishing glossy"></label>
@@ -582,7 +584,21 @@ async function viewNewRequest(main) {
         <div class="row" style="margin-top:4px">${pkgBadge(v.package_type)}${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : ''}${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}</div></div></div>`
         : p ? 'Pilih salah satu variasi di atas.' : 'Belum ada sticker dipilih. Tidak ketemu? Gunakan “Input manual”.';
     }
+    syncSuppliers(mode === 'manual' ? manualVals().package_type : sel.variant?.package_type);
     $('#add').disabled = !(ready && +$('#qty').value > 0 && supplier.value && (supplier.value !== 'Lainnya' || $('#sup-other').value.trim()));
+  }
+  // Sticker/label: hanya PWD atau Kame. Flexible & box: semua supplier termasuk "belum tahu".
+  let supFor = null;
+  function syncSuppliers(pkg) {
+    const key = pkg === 'sticker' ? 'sticker' : pkg ? 'other' : 'none';
+    if (key === supFor) return;
+    supFor = key;
+    const list = key === 'sticker' ? STICKER_SUPPLIERS : state.suppliers;
+    const keep = list.includes(supplier.value) ? supplier.value : '';
+    supplier.innerHTML = `<option value="">— Pilih supplier —</option>${list.map(sp => `<option value="${esc(sp)}">${esc(supOption(sp))}</option>`).join('')}`;
+    supplier.value = keep;
+    $('#sup-other-wrap').classList.toggle('hidden', keep !== 'Lainnya');
+    $('#sup-hint').textContent = key === 'sticker' ? 'Sticker/label wajib dicetak di PWD atau Kame.' : key === 'other' ? 'Tidak yakin? Pilih “Belum tahu”, nanti tim Purchasing yang menentukan.' : '';
   }
   $('#add').onclick = () => {
     const common = { qty: +$('#qty').value, supplier: supplier.value, supplier_other: $('#sup-other').value.trim(), notes: $('#item-note').value.trim() };
@@ -833,7 +849,7 @@ function renderRequestModal(m, r, reload) {
     const mm = modal('Pilih supplier', `
       <div><div class="small muted">${esc(it.brand)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b>
         <div class="small">${pkgBadge(it.package_type, true)} ${esc(it.variant_name || '')} · ${fmtNum(it.qty)} pcs</div></div>
-      <label class="f">Supplier<select class="input" id="sp-sel">${state.suppliers.filter(sp => sp !== UNDECIDED).map(sp => `<option ${sp === cur ? 'selected' : ''}>${esc(sp)}</option>`).join('')}</select></label>
+      <label class="f">Supplier<select class="input" id="sp-sel">${suppliersFor(it.package_type || 'sticker').filter(sp => sp !== UNDECIDED).map(sp => `<option ${sp === cur ? 'selected' : ''}>${esc(sp)}</option>`).join('')}</select></label>
       <label class="f ${cur === 'Lainnya' ? '' : 'hidden'}" id="sp-other-w">Nama supplier lainnya<input class="input" id="sp-other" value="${esc(it.supplier.replace(/^Lainnya:\s*/, '') !== it.supplier ? it.supplier.replace(/^Lainnya:\s*/, '') : '')}"></label>`,
     { foot: '<button class="btn" data-close>Batal</button><button class="btn primary" id="sp-ok">Simpan supplier</button>' });
     $('#sp-sel', mm.el).onchange = e => $('#sp-other-w', mm.el).classList.toggle('hidden', e.target.value !== 'Lainnya');

@@ -38,11 +38,16 @@ test('request → Desainer + Purchasing sign → sent to vendor', async () => {
   const v = (await u('/api/products/' + (await u('/api/products?q=M141')).data[0].id)).data.variants[0];
   const bad = await u('/api/requests', { items: [{ variant_id: v.id, qty: 10, supplier: 'Tidak Ada' }] });
   assert.strictEqual(bad.status, 400);
-  const created = await u('/api/requests', { request_date: '2026-11-23', items: [{ variant_id: v.id, qty: 1000, supplier: 'Lainnya', supplier_other: 'Vendor X' }] });
+  for (const sup of ['Lainnya', 'Belum ditentukan', 'Jawara Pouch']) {
+    const res = await u('/api/requests', { items: [{ variant_id: v.id, qty: 10, supplier: sup, supplier_other: 'Vendor X' }] });
+    assert.strictEqual(res.status, 400, `sticker cannot use ${sup}`);
+    assert.match(res.data.error, /PWD atau Kame/);
+  }
+  const created = await u('/api/requests', { request_date: '2026-11-23', items: [{ variant_id: v.id, qty: 1000, supplier: 'PWD' }] });
   assert.strictEqual(created.status, 200);
   const r = created.data;
   assert.match(r.number, /^REQ-202611-\d{4}$/);
-  assert.strictEqual(r.items[0].supplier, 'Lainnya: Vendor X');
+  assert.strictEqual(r.items[0].supplier, 'PWD');
 
   const admin = await login('admin', 'admin123');
   assert.strictEqual((await admin(`/api/requests/${r.id}/status`, { status: 'sent' })).status, 400, 'cannot send before approvals');
@@ -163,7 +168,8 @@ test('shared history: every user sees all team orders, progress, and double-orde
 
 test('supplier can be left for Purchasing to choose; blocks PR / naik cetak until chosen', async () => {
   const u = await login('user');
-  const v = (await u('/api/products/' + (await u('/api/products?q=M001')).data[0].id)).data.variants[0];
+  const fp = (await u('/api/products?package_type=flexible&q=Nastan')).data[0];
+  const v = (await u('/api/products/' + fp.id)).data.variants.find(x => x.package_type === 'flexible');
   const r = (await u('/api/requests', { items: [{ variant_id: v.id, qty: 700, supplier: 'Belum ditentukan' }] })).data;
   assert.strictEqual(r.items[0].supplier, 'Belum ditentukan');
   for (const who of ['desainer', 'purchasing']) await (await login(who))(`/api/requests/${r.id}/approve`, { decision: 'approved', signature: SIG });
@@ -173,6 +179,16 @@ test('supplier can be left for Purchasing to choose; blocks PR / naik cetak unti
   assert.strictEqual((await u('/api/request-items/' + r.items[0].id, { supplier: 'Kame' }, 'PUT')).status, 403, 'requester cannot choose');
   assert.strictEqual((await pur('/api/request-items/' + r.items[0].id, { qty: 1 }, 'PUT')).status, 403, 'purchasing only changes supplier');
   assert.strictEqual((await pur('/api/request-items/' + r.items[0].id, { supplier: 'Lainnya', supplier_other: 'Vendor Baru' }, 'PUT')).status, 200);
+  // a sticker item can only be moved between PWD and Kame
+  const sv = (await u('/api/products/' + (await u('/api/products?q=M001')).data[0].id)).data.variants[0];
+  const sr = (await u('/api/requests', { items: [{ variant_id: sv.id, qty: 50, supplier: 'Kame' }] })).data;
+  assert.strictEqual((await pur('/api/request-items/' + sr.items[0].id, { supplier: 'Jawara Pouch' }, 'PUT')).status, 400);
+  assert.strictEqual((await pur('/api/request-items/' + sr.items[0].id, { supplier: 'PWD' }, 'PUT')).status, 200);
+  // manual sticker follows the same rule; manual box may be left undecided
+  const ms = await u('/api/requests', { items: [{ manual: true, manual_confirmed: true, brand: 'B', product_name: 'Label X', package_type: 'sticker', qty: 5, supplier: 'Belum ditentukan' }] });
+  assert.strictEqual(ms.status, 400);
+  const mb = await u('/api/requests', { items: [{ manual: true, manual_confirmed: true, brand: 'B', product_name: 'Box X', package_type: 'box', qty: 5, supplier: 'Belum ditentukan' }] });
+  assert.strictEqual(mb.status, 200);
   const after = (await pur(`/api/requests/${r.id}`)).data;
   assert.strictEqual(after.items[0].supplier, 'Lainnya: Vendor Baru');
   assert.strictEqual((await pur(`/api/requests/${r.id}/purchase-requests`, { supplier: 'Lainnya: Vendor Baru' })).status, 200);

@@ -17,6 +17,15 @@ const SESSION_DAYS = 14;
 const SUPPLIER_UNDECIDED = 'Belum ditentukan';
 const SUPPLIERS = ['Kame', 'PWD', 'Jawara Pouch', 'Flexypack Sachet & Pouch', 'Juke Sachet & Pouch', 'Lainnya', SUPPLIER_UNDECIDED];
 const DUPLICATE_WINDOW_DAYS = 30;
+// Sticker / label hanya dicetak di PWD atau Kame. Flexible packaging & box boleh semua supplier (termasuk "Belum ditentukan").
+const STICKER_SUPPLIERS = ['PWD', 'Kame'];
+const allowedSuppliers = pkg => (pkg === 'sticker' ? STICKER_SUPPLIERS : SUPPLIERS);
+function assertSupplierFor(pkg, rawSupplier, label) {
+  if (!allowedSuppliers(pkg).includes(rawSupplier)) {
+    if (pkg === 'sticker') throw bad(`${label}supplier untuk sticker/label wajib dipilih: PWD atau Kame.`);
+    throw bad(`${label}pilih supplier.`);
+  }
+}
 const DIVISIONS = ['Tim Produksi', 'Tim Packing', 'Tim Gudang', 'Desain', 'Purchasing', 'Marketing'];
 const ROLES = ['admin', 'user', 'manager_desain', 'purchasing', 'desainer'];
 const GEN_DIR = path.join(DATA_DIR, 'generated');
@@ -129,7 +138,7 @@ app.post('/api/logout', (req, res) => {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
   res.json({ ok: true });
 });
-app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS, supplier_undecided: SUPPLIER_UNDECIDED, divisions: DIVISIONS, duplicate_days: DUPLICATE_WINDOW_DAYS }));
+app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS, supplier_undecided: SUPPLIER_UNDECIDED, divisions: DIVISIONS, duplicate_days: DUPLICATE_WINDOW_DAYS, sticker_suppliers: STICKER_SUPPLIERS }));
 app.get('/api/me/signature', auth(), (req, res) => res.json({ signature: req.user.signature || null }));
 app.put('/api/me/signature', auth(), (req, res) => {
   const sig = String(req.body.signature || '');
@@ -513,12 +522,14 @@ app.post('/api/requests', auth(), (req, res) => {
         drive_file_id: fileId && /\/file\/d\/|[?&]id=/.test(link) ? fileId : '', drive_link: link,
         package_type: PACKAGING_TYPES.includes(it.package_type) ? it.package_type : 'sticker',
       };
+      assertSupplierFor(v.package_type, str(it.supplier, 100), `Item #${i + 1}: `);
       return { v, qty, supplier, notes, manual: 1 };
     }
     const v = db.prepare(`SELECT v.*, p.code AS product_code, p.name AS product_name, b.name AS brand
       FROM variants v JOIN products p ON p.id = v.product_id JOIN brands b ON b.id = p.brand_id
       WHERE v.id = ? AND v.active = 1 AND p.active = 1`).get(Number(it.variant_id));
     if (!v) throw bad(`Item #${i + 1}: sticker tidak ditemukan.`);
+    assertSupplierFor(v.package_type, str(it.supplier, 100), `Item #${i + 1}: `);
     return { v, qty, supplier, notes, manual: 0 };
   });
   const id = tx(() => {
@@ -706,6 +717,7 @@ app.put('/api/request-items/:id', auth('admin', 'purchasing'), (req, res) => {
   let supplier = b.supplier !== undefined ? str(b.supplier, 100) : it.supplier;
   if (b.supplier !== undefined) {
     if (!SUPPLIERS.includes(supplier)) throw bad('Supplier tidak valid.');
+    assertSupplierFor(it.package_type || 'sticker', supplier, '');
     if (supplier === 'Lainnya') { const o = str(b.supplier_other, 100); if (!o) throw bad('Tuliskan nama supplier.'); supplier = `Lainnya: ${o}`; }
   }
   if (req.user.role === 'purchasing' && (b.batch_number !== undefined || b.exp_code !== undefined || b.qty !== undefined)) {
