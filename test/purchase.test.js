@@ -7,7 +7,6 @@ const path = require('path');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'stiker-pr-test-'));
 const app = require('../server');
 const { classifyPackaging } = require('../src/catalogParser');
-const { terbilang } = require('../src/purchasePdf');
 
 const SIG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 let server, base;
@@ -39,12 +38,6 @@ test('packaging type is recognised from the file / folder names', () => {
     ['Brocure Suntikan Cetak.pdf', [], 'other'],
   ];
   for (const [file, sub, want] of cases) assert.strictEqual(classifyPackaging(file, sub), want, file);
-});
-
-test('terbilang writes amounts in Indonesian words', () => {
-  assert.strictEqual(terbilang(16261500), 'Enam belas juta dua ratus enam puluh satu ribu lima ratus rupiah');
-  assert.strictEqual(terbilang(1000), 'Seribu rupiah');
-  assert.strictEqual(terbilang(0), 'Nol rupiah');
 });
 
 test('catalog can be filtered by packaging type; admin override survives', async () => {
@@ -82,11 +75,13 @@ test('purchase request: only after approval, numbered, formal PDF', async () => 
   assert.strictEqual(draft.vendor.name, 'Juke Sachet & Pouch');
   assert.strictEqual(draft.delivery_date, '2026-12-01');
   const pr = (await admin(`/api/requests/${r.id}/purchase-requests`, {
-    supplier: 'Juke Sachet & Pouch', vendor_contact: 'Ibu Rina', vendor_address: 'Bekasi', pr_date: '2026-11-23', tax_percent: 11,
-    items: [{ id: draft.items[0].id, qty: 5000, unit: 'pcs', unit_price: '1250' }],
+    supplier: 'Juke Sachet & Pouch', vendor_contact: 'Ibu Rina', vendor_address: 'Bekasi', pr_date: '2026-11-23',
+    items: [{ id: draft.items[0].id, qty: 4500, unit: 'pcs', unit_price: '1250' }],
   })).data;
   assert.strictEqual(pr.number, 'PR/SKI/2026/11/0001');
-  assert.strictEqual(pr.items[0].unit_price, 1250);
+  assert.strictEqual(pr.items[0].qty, 4500);
+  assert.strictEqual(pr.items[0].unit_price, undefined, 'harga tidak disimpan / dicetak');
+  assert.strictEqual(draft.delivery_address, 'Jl. Raya Pasir Putih No. 147, Sawangan, Depok');
   const pdf = await admin(pr.pdf_url);
   assert.strictEqual(pdf.status, 200);
   assert.strictEqual(pdf.data.slice(0, 5).toString(), '%PDF-');
@@ -104,6 +99,9 @@ test('company letterhead settings', async () => {
   const admin = await login('admin', 'admin123');
   const c = (await admin('/api/settings/company')).data;
   assert.strictEqual(c.company_name, 'PT SAINSGO KARYA INDONESIA');
+  assert.strictEqual(c.company_email, 'admin@sainsgo.com');
+  assert.strictEqual(c.pr_city, 'Depok');
+  assert.ok(c.logo_is_default && c.company_logo.startsWith('data:image/png;base64,'), 'logo Sainsgo bawaan');
   const bad = await admin('/api/settings/company', { company_logo: 'data:text/html;base64,AAAA' }, 'PUT');
   assert.strictEqual(bad.status, 400);
   const ok = (await admin('/api/settings/company', { company_address: 'Jakarta', company_logo: SIG }, 'PUT')).data;

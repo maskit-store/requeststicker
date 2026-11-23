@@ -3,34 +3,19 @@ const PDFDocument = require('pdfkit');
 const { getThumbnail, imageKind } = require('./thumbs');
 
 const PACKAGE_LABEL = { sticker: 'Sticker / Label', flexible: 'Flexible Packaging', box: 'Box / Karton', other: 'Lainnya' };
-const C = { ink: '#111111', muted: '#555555', line: '#9a9a9a', soft: '#f2f2f2', head: '#1f2a37', link: '#1a4fb5' };
+const C = { ink: '#111111', muted: '#555555', line: '#9a9a9a', head: '#e6f6f5', brand: '#168898', link: '#1a4fb5' };
+const TERMS = [
+  'Barang dicetak sesuai file cetak terlampir (link file siap cetak) beserta ukuran, bahan, dan jumlah pada tabel di atas.',
+  'Vendor wajib mengirimkan proof/sampel cetak untuk disetujui sebelum produksi massal.',
+  'Nomor batch dan tanggal kedaluwarsa harus sesuai file cetak. Kesalahan cetak menjadi tanggung jawab vendor.',
+  'Mohon cantumkan nomor Purchase Request ini pada surat jalan dan invoice.',
+];
 const MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 
 function tanggal(iso) {
   if (!iso) return '-';
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
   return `${d} ${MONTHS[m - 1]} ${y}`;
-}
-const rupiah = n => 'Rp ' + Math.round(n).toLocaleString('id-ID');
-
-// Angka → kata (Bahasa Indonesia) untuk "Terbilang".
-function terbilang(n) {
-  n = Math.floor(Math.abs(n));
-  const s = ['', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
-  const f = x => {
-    if (x < 12) return s[x];
-    if (x < 20) return f(x - 10) + ' belas';
-    if (x < 100) return f(Math.floor(x / 10)) + ' puluh' + (x % 10 ? ' ' + f(x % 10) : '');
-    if (x < 200) return 'seratus' + (x - 100 ? ' ' + f(x - 100) : '');
-    if (x < 1000) return f(Math.floor(x / 100)) + ' ratus' + (x % 100 ? ' ' + f(x % 100) : '');
-    if (x < 2000) return 'seribu' + (x - 1000 ? ' ' + f(x - 1000) : '');
-    if (x < 1e6) return f(Math.floor(x / 1000)) + ' ribu' + (x % 1000 ? ' ' + f(x % 1000) : '');
-    if (x < 1e9) return f(Math.floor(x / 1e6)) + ' juta' + (x % 1e6 ? ' ' + f(x % 1e6) : '');
-    if (x < 1e12) return f(Math.floor(x / 1e9)) + ' miliar' + (x % 1e9 ? ' ' + f(x % 1e9) : '');
-    return f(Math.floor(x / 1e12)) + ' triliun' + (x % 1e12 ? ' ' + f(x % 1e12) : '');
-  };
-  const out = n === 0 ? 'nol' : f(n);
-  return out.charAt(0).toUpperCase() + out.slice(1) + ' rupiah';
 }
 
 function dataUrlToBuffer(u) {
@@ -40,22 +25,21 @@ function dataUrlToBuffer(u) {
 
 function letterhead(doc, company) {
   const L = doc.page.margins.left, W = doc.page.width - L - doc.page.margins.right;
-  const top = 34;
+  const top = 30;
   const logo = dataUrlToBuffer(company.company_logo);
-  let textX = L, textW = W, align = 'center';
+  let textX = L, textW = W, align = 'center', logoH = 0;
   if (logo) {
-    try { doc.image(logo, L, top, { fit: [70, 62], valign: 'center' }); textX = L + 84; textW = W - 84; align = 'left'; } catch {}
+    try {
+      doc.image(logo, L, top, { fit: [64, 76], align: 'center', valign: 'center' });
+      textX = L + 80; textW = W - 80; align = 'left'; logoH = 76;
+    } catch {}
   }
-  doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(17).text(company.company_name || 'PT SAINSGO KARYA INDONESIA', textX, top + 2, { width: textW, align, characterSpacing: 0.6 });
-  doc.font('Helvetica').fontSize(8.6).fillColor('#333');
-  if (company.company_tagline) doc.font('Helvetica-Oblique').text(company.company_tagline, { width: textW, align }).font('Helvetica');
-  if (company.company_address) doc.text(company.company_address.replace(/\s*\n\s*/g, ', '), { width: textW, align });
-  const contact = [company.company_phone && `Telp. ${company.company_phone}`, company.company_email && `Email: ${company.company_email}`,
-    company.company_website].filter(Boolean).join('   |   ');
-  if (contact) doc.text(contact, { width: textW, align });
-  if (company.company_npwp) doc.text(`NPWP: ${company.company_npwp}`, { width: textW, align });
-  const y = Math.max(doc.y + 6, align === 'left' ? top + 66 : 0); // leave room for the logo when there is one
-  doc.moveTo(L, y).lineTo(L + W, y).lineWidth(2.2).strokeColor(C.ink).stroke();
+  doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(18).text(company.company_name || 'PT SAINSGO KARYA INDONESIA', textX, top + (logoH ? 14 : 2), { width: textW, align, characterSpacing: 0.6 });
+  doc.font('Helvetica').fontSize(9).fillColor('#333');
+  if (company.company_address) doc.text(company.company_address.replace(/\s*\n\s*/g, ', '), textX, doc.y + 2, { width: textW, align });
+  if (company.company_email) doc.text(`Email: ${company.company_email}`, { width: textW, align });
+  const y = Math.max(doc.y + 6, top + logoH + 4);
+  doc.moveTo(L, y).lineTo(L + W, y).lineWidth(2.2).strokeColor(C.brand).stroke();
   doc.moveTo(L, y + 3.5).lineTo(L + W, y + 3.5).lineWidth(0.7).stroke();
   doc.y = y + 14;
 }
@@ -77,13 +61,12 @@ function footer(doc, company, pr) {
 }
 
 async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSignature }) {
-  const doc = new PDFDocument({ size: 'A4', margins: { top: 34, left: 46, right: 46, bottom: 52 }, bufferPages: true,
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 30, left: 46, right: 46, bottom: 52 }, bufferPages: true,
     info: { Title: `Purchase Request ${pr.number}`, Author: company.company_name } });
   doc.pipe(stream);
   const L = doc.page.margins.left, W = doc.page.width - L - doc.page.margins.right;
   const bottomLimit = () => doc.page.height - doc.page.margins.bottom;
   const items = pr.items;
-  const hasPrice = items.some(i => i.unit_price != null);
   const fileUrl = it => it.generated_uuid ? `${baseUrl}/files/${it.generated_uuid}/${encodeURIComponent(it.generated_name || 'file.pdf')}` : '';
 
   letterhead(doc, company);
@@ -91,7 +74,7 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   // Title
   doc.font('Helvetica-Bold').fontSize(14).fillColor(C.ink).text('PURCHASE REQUEST', L, doc.y, { width: W, align: 'center', characterSpacing: 1.2 });
   const tw = doc.widthOfString('PURCHASE REQUEST', { characterSpacing: 1.2 });
-  doc.moveTo(L + (W - tw) / 2, doc.y).lineTo(L + (W + tw) / 2, doc.y).lineWidth(0.8).stroke();
+  doc.moveTo(L + (W - tw) / 2, doc.y).lineTo(L + (W + tw) / 2, doc.y).lineWidth(0.8).strokeColor(C.ink).stroke();
   doc.font('Helvetica').fontSize(9.5).text(`Nomor: ${pr.number}`, L, doc.y + 3, { width: W, align: 'center' });
   doc.moveDown(1);
 
@@ -112,7 +95,6 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
     ['Ref. Request Internal', request.number],
     ['Pemohon', `${request.requester_name}${request.division ? ' (' + request.division + ')' : ''}`],
     ['Tanggal Dibutuhkan', pr.delivery_date ? tanggal(pr.delivery_date) : '-'],
-    ['Pembayaran', pr.payment_terms || '-'],
   ];
   let iy = y0;
   const ix = L + colL, iw = W - colL;
@@ -128,21 +110,17 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   doc.moveDown(0.3).text('Bersama ini kami mengajukan permintaan pencetakan kemasan dengan rincian sebagai berikut:', { width: W, align: 'justify' });
   doc.moveDown(0.6);
 
-  // Items table
-  const cols = hasPrice
-    ? [{ t: 'No', w: 22, a: 'center' }, { t: 'Deskripsi Barang', w: 170 }, { t: 'Jenis', w: 58 }, { t: 'Ukuran', w: 52, a: 'center' },
-       { t: 'Qty', w: 56, a: 'right' }, { t: 'Harga Satuan', w: 62, a: 'right' }, { t: 'Jumlah', w: W - 420, a: 'right' }]
-    : [{ t: 'No', w: 24, a: 'center' }, { t: 'Deskripsi Barang', w: 255 }, { t: 'Jenis', w: 72 }, { t: 'Ukuran', w: 70, a: 'center' },
-       { t: 'Qty', w: W - 421, a: 'right' }];
+  // Items table (tanpa harga)
+  const cols = [{ t: 'No', w: 24, a: 'center' }, { t: 'Deskripsi Barang', w: 233 }, { t: 'Jenis Kemasan', w: 80 },
+    { t: 'Ukuran', w: 76, a: 'center' }, { t: 'Jumlah', w: W - 413, a: 'right' }];
   const drawHead = () => {
     const y = doc.y;
-    const hh = 26;
-    doc.rect(L, y, W, hh).fillAndStroke('#e9ecef', C.ink);
+    const hh = 22;
+    doc.rect(L, y, W, hh).fillAndStroke(C.head, C.ink);
     let x = L;
-    doc.font('Helvetica-Bold').fontSize(8.3).fillColor(C.ink);
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink);
     for (const c of cols) {
-      const th = doc.heightOfString(c.t, { width: c.w - 8 });
-      doc.text(c.t, x + 4, y + (hh - th) / 2 + 1, { width: c.w - 8, align: c.a || 'left' });
+      doc.text(c.t, x + 4, y + 7, { width: c.w - 8, align: c.a || 'left' });
       doc.moveTo(x, y).lineTo(x, y + hh).lineWidth(0.6).strokeColor(C.ink).stroke();
       x += c.w;
     }
@@ -150,7 +128,6 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
     doc.y = y + hh;
   };
   drawHead();
-  let subtotal = 0;
   items.forEach((it, i) => {
     const desc = [
       { f: 'Helvetica-Bold', s: 8.8, t: `${it.product_code ? it.product_code + ' - ' : ''}${it.product_name}` },
@@ -173,14 +150,6 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
       () => doc.font('Helvetica').fontSize(8.5).text(it.dimension || '-', x + 4, y + 6, { width: cols[3].w - 8, align: 'center' }),
       () => doc.font('Helvetica-Bold').fontSize(9).text(`${Number(it.qty).toLocaleString('id-ID')} ${it.unit || 'pcs'}`, x + 4, y + 6, { width: cols[4].w - 8, align: 'right' }),
     ];
-    if (hasPrice) {
-      const amount = it.unit_price != null ? it.unit_price * it.qty : null;
-      if (amount != null) subtotal += amount;
-      cells.push(
-        () => doc.font('Helvetica').fontSize(8.5).text(it.unit_price != null ? rupiah(it.unit_price) : '-', x + 4, y + 6, { width: cols[5].w - 8, align: 'right' }),
-        () => doc.font('Helvetica-Bold').fontSize(8.5).text(amount != null ? rupiah(amount) : '-', x + 4, y + 6, { width: cols[6].w - 8, align: 'right' }),
-      );
-    }
     cells.forEach((draw, k) => {
       doc.fillColor(C.ink); draw();
       doc.moveTo(x, y).lineTo(x, y + h).lineWidth(0.6).strokeColor(C.ink).stroke();
@@ -190,78 +159,63 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
     doc.moveTo(L, y + h).lineTo(L + W, y + h).stroke();
     doc.y = y + h;
   });
-
-  // totals
-  const totalQty = items.reduce((a, b) => a + Number(b.qty), 0);
-  const sumRow = (label, value, bold) => {
+  // total quantity
+  {
+    const totalQty = items.reduce((a, b) => a + Number(b.qty), 0);
+    if (doc.y + 30 > bottomLimit()) doc.addPage();
     const y = doc.y, lw = W - cols[cols.length - 1].w;
     doc.rect(L, y, W, 18).lineWidth(0.6).strokeColor(C.ink).stroke();
     doc.moveTo(L + lw, y).lineTo(L + lw, y + 18).stroke();
-    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(C.ink)
-      .text(label, L + 4, y + 5, { width: lw - 8, align: 'right' })
-      .text(value, L + lw + 4, y + 5, { width: cols[cols.length - 1].w - 8, align: 'right' });
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+      .text(`Total (${items.length} item)`, L + 4, y + 5, { width: lw - 8, align: 'right' })
+      .text(`${totalQty.toLocaleString('id-ID')} pcs`, L + lw + 4, y + 5, { width: cols[cols.length - 1].w - 8, align: 'right' });
     doc.y = y + 18;
-  };
-  if (doc.y + 80 > bottomLimit()) doc.addPage();
-  if (hasPrice) {
-    const tax = subtotal * (Number(pr.tax_percent) || 0) / 100;
-    sumRow(`Subtotal (${totalQty.toLocaleString('id-ID')} pcs)`, rupiah(subtotal));
-    if (pr.tax_percent) sumRow(`PPN ${pr.tax_percent}%`, rupiah(tax));
-    sumRow('TOTAL', rupiah(subtotal + tax), true);
-    doc.moveDown(0.4).font('Helvetica-Oblique').fontSize(8.8).text(`Terbilang: ${terbilang(subtotal + tax)}`, L, doc.y, { width: W });
-  } else {
-    sumRow('Total Kuantitas', `${totalQty.toLocaleString('id-ID')} pcs`, true);
-    doc.moveDown(0.4).font('Helvetica-Oblique').fontSize(8.5).fillColor(C.muted).text('Mohon kirimkan penawaran harga / konfirmasi harga sebelum produksi.', L, doc.y, { width: W });
   }
-  doc.moveDown(0.8);
+  doc.moveDown(0.9);
 
-  // Delivery & files
-  const block = (title, lines) => {
+  // Delivery, files, notes
+  const block = (title, body) => {
     if (doc.y + 40 > bottomLimit()) doc.addPage();
     doc.font('Helvetica-Bold').fontSize(9.5).fillColor(C.ink).text(title, L, doc.y, { width: W });
     doc.moveDown(0.2);
-    lines();
-    doc.moveDown(0.45);
+    body();
+    doc.moveDown(0.5);
   };
   block('Pengiriman', () => {
-    doc.font('Helvetica').fontSize(8.8).text(`Alamat kirim: ${pr.delivery_address || '-'}   ·   Tanggal kirim: ${pr.delivery_date ? tanggal(pr.delivery_date) : 'secepatnya / sesuai kesepakatan'}`, L, doc.y, { width: W });
+    doc.font('Helvetica').fontSize(8.8).text(`Alamat kirim: ${pr.delivery_address || '-'}`, L, doc.y, { width: W });
   });
   block('File Cetak', () => {
     items.forEach((it, i) => {
       if (doc.y + 26 > bottomLimit()) doc.addPage();
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(`${i + 1}. ${it.product_code ? it.product_code + ' - ' : ''}${it.product_name} (${it.dimension || '-'})`, L, doc.y, { width: W });
-      const u = fileUrl(it);
       const linkLine = (label, url, strong) => {
         const y = doc.y;
         doc.font(strong ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.3).fillColor(C.link).text(label, L + 14, y, { width: 150, link: url, underline: true, lineBreak: false });
         doc.font('Helvetica').fontSize(7.3).fillColor(C.muted);
         let shown = url;
         while (shown.length > 20 && doc.widthOfString(shown + '…') > W - 172) shown = shown.slice(0, -4);
-        const label2 = shown === url ? url : shown + '…';
-        doc.text(label2, L + 168, y + 0.8, { width: doc.widthOfString(label2) + 2, link: url, lineBreak: false });
+        const text = shown === url ? url : shown + '…';
+        doc.text(text, L + 168, y + 0.8, { width: doc.widthOfString(text) + 2, link: url, lineBreak: false });
         doc.y = y + 11;
       };
+      const u = fileUrl(it);
       if (u) linkLine('File siap cetak (klik)', u, true);
       if (it.drive_link) linkLine('File master Google Drive', it.drive_link, false);
       doc.moveDown(0.25);
     });
     doc.fillColor(C.ink);
   });
-  const terms = String(company.pr_terms || '').split('\n').map(t => t.trim()).filter(Boolean);
-  if (terms.length || pr.notes) {
-    block('Ketentuan', () => {
-      terms.forEach((t, i) => doc.font('Helvetica').fontSize(8.5).text(`${i + 1}.  ${t}`, L, doc.y, { width: W, align: 'justify', indent: 0 }));
-      if (pr.notes) doc.font('Helvetica-Bold').fontSize(8.8).text(`Catatan: `, L, doc.y, { continued: true }).font('Helvetica').text(pr.notes, { width: W });
-    });
-  }
+  block('Ketentuan', () => {
+    TERMS.forEach((t, i) => doc.font('Helvetica').fontSize(8.6).fillColor(C.ink).text(`${i + 1}.  ${t}`, L, doc.y, { width: W, align: 'justify' }));
+    if (pr.notes) doc.font('Helvetica-Bold').fontSize(8.6).text('Catatan: ', L, doc.y, { continued: true }).font('Helvetica').text(pr.notes, { width: W });
+  });
+
   // Closing + signatures are kept together on one page.
   const boxH = 98;
   if (doc.y + 30 + 14 + boxH > bottomLimit()) doc.addPage();
   doc.font('Helvetica').fontSize(9.5).fillColor(C.ink).text('Demikian permintaan ini kami sampaikan. Atas perhatian dan kerja samanya kami ucapkan terima kasih.', L, doc.y, { width: W, align: 'justify' });
   doc.moveDown(0.6);
-
-  // Signatures
-  doc.font('Helvetica').fontSize(9.5).text(`${company.pr_city || 'Jakarta'}, ${tanggal(pr.pr_date)}`, L, doc.y, { width: W, align: 'right' });
+  doc.font('Helvetica').fontSize(9.5).text(`${company.pr_city || 'Depok'}, ${tanggal(pr.pr_date)}`, L, doc.y, { width: W, align: 'right' });
   doc.moveDown(0.3);
   const ap = role => (request.approvals || []).find(a => a.role === role && a.decision === 'approved');
   const sigs = [
@@ -314,4 +268,4 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   doc.end();
 }
 
-module.exports = { purchasePdf, terbilang, PACKAGE_LABEL };
+module.exports = { purchasePdf, PACKAGE_LABEL };

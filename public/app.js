@@ -153,13 +153,28 @@ async function render() {
   if (r.roles && !r.roles.includes(state.user.role)) { location.hash = '#/'; return; }
   if (!$('.shell', app)) renderShell(app);
   $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.r === (ROUTES[name] ? name : '')));
-  $('.side').classList.remove('open');
+  $('.side').classList.remove('open'); $('#scrim')?.classList.remove('show');
   document.title = `${r.title} · Request Cetak Sticker`;
   const main = $('.main');
   main.innerHTML = '<div class="muted">Memuat…</div>';
   try { await r.view(main, rest); } catch (e) { main.innerHTML = `<div class="callout err">${esc(e.message)}</div>`; }
   refreshCounts();
 }
+
+const NAV_ICON = {
+  '': '<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/>',
+  baru: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/>',
+  request: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+  persetujuan: '<path d="M4 17c3-1 4-6 7-6s2 5 5 5 3-2 4-3"/><path d="M4 21h16"/>',
+  generator: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h2M7 14h6M15 10h2"/>',
+  katalog: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  laporan: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 14h8M8 17h5"/>',
+  pengguna: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.8c1.6.8 2.6 2.6 3 5.2"/>',
+  kop: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  profil: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.2-7 8-7s7 2.5 8 7"/>',
+};
+const navIcon = k => `<svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${NAV_ICON[k] || ''}</svg>`;
+const LOGO_ICON = '<img src="/brand/sainsgo-icon.png" alt="" class="logo-img">';
 
 function renderShell(app) {
   const u = state.user;
@@ -173,17 +188,26 @@ function renderShell(app) {
     ...(u.role === 'admin' ? [['kop', 'Kop Surat & PR']] : []),
     ['profil', 'Profil & TTD'],
   ];
-  app.innerHTML = `<div class="topbar"><button aria-label="Menu" id="menu">☰</button><b>Request Cetak Sticker</b></div>
+  const initials = u.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  app.innerHTML = `<header class="topbar">
+      <button aria-label="Buka menu" id="menu" class="icon-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <span class="tb-brand">${LOGO_ICON}<b>Request Cetak</b></span>
+      <a class="tb-new" href="#/baru" aria-label="Buat request">+</a>
+    </header>
   <div class="shell">
-    <aside class="side">
-      <div class="brand"><span class="logo">${ICON.logo}</span><span>Request Cetak<small>Sticker Kemasan</small></span></div>
-      <nav class="nav">${links.map(([r, t]) => `<a href="#/${r}" data-r="${r}">${t}</a>`).join('')}</nav>
-      <div class="who"><b>${esc(u.name)}</b>${esc(ROLE[u.role])}${u.division ? ' · ' + esc(u.division) : ''}<br><button id="logout">Keluar</button></div>
+    <aside class="side" id="side">
+      <div class="brand">${LOGO_ICON}<span>Request Cetak<small>Sticker & Kemasan · Sainsgo</small></span></div>
+      <nav class="nav">${links.map(([r, t]) => `<a href="#/${r}" data-r="${r}">${navIcon(r)}<span>${t}</span></a>`).join('')}</nav>
+      <div class="who"><span class="avatar">${esc(initials)}</span><div><b>${esc(u.name)}</b><span>${esc(ROLE[u.role])}${u.division ? ' · ' + esc(u.division) : ''}</span></div>
+        <button id="logout" class="icon-btn" title="Keluar" aria-label="Keluar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H4"/></svg></button></div>
     </aside>
+    <div class="scrim" id="scrim"></div>
     <main class="main"></main>
   </div>`;
   $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); state.user = null; state.brands = null; location.hash = '#/'; render(); };
-  $('#menu').onclick = () => $('.side').classList.toggle('open');
+  const toggle = open => { $('#side').classList.toggle('open', open); $('#scrim').classList.toggle('show', open); };
+  $('#menu').onclick = () => toggle(!$('#side').classList.contains('open'));
+  $('#scrim').onclick = () => toggle(false);
 }
 async function refreshCounts() {
   try {
@@ -196,15 +220,16 @@ async function refreshCounts() {
 function renderLogin(app) {
   app.innerHTML = `<div class="login">
     <div class="art">
-      <div class="brand" style="padding:0"><span class="logo">${ICON.logo}</span><span>Request Cetak<small>Sticker Kemasan</small></span></div>
-      <div><h1>Request cetak sticker kemasan, rapi dari permintaan sampai vendor.</h1>
-      <p>Pilih sticker langsung dari database Google Drive, lihat visual & ukurannya, lalu ajukan. Ringkasan PDF siap diteruskan ke vendor setelah disetujui.</p></div>
-      <div class="flow"><div><b>1</b>Tim memilih sticker, variasi, jumlah & supplier</div><div><b>2</b>Admin mengisi nomor batch & expired — file cetak otomatis dibuat</div>
-      <div><b>3</b>Desainer, Manager Desain & Purchasing ACC + tanda tangan</div><div><b>4</b>Admin unduh ringkasan PDF & teruskan ke vendor</div></div>
+      <div class="art-logo"><img src="/brand/sainsgo-logo.png" alt="Sainsgo"></div>
+      <div><h1>Request cetak sticker & kemasan, rapi dari permintaan sampai vendor.</h1>
+      <p>Pilih desain langsung dari database Google Drive, cek visual & ukurannya, lalu ajukan. Purchase Request ke vendor siap setelah disetujui.</p></div>
+      <div class="flow"><div><b>1</b>Tim memilih desain, variasi, jumlah & supplier</div><div><b>2</b>Admin mengisi nomor batch & expired — file cetak otomatis dibuat</div>
+      <div><b>3</b>Desainer, Manager Desain & Purchasing ACC + tanda tangan</div><div><b>4</b>Purchase Request ber-kop dikirim ke vendor</div></div>
     </div>
     <form id="lf">
-      <h1>Masuk</h1>
-      <label class="f">Username<input class="input" name="username" autocomplete="username" required autofocus></label>
+      <img src="/brand/sainsgo-icon.png" alt="" class="lf-logo">
+      <div><h1>Selamat datang 👋</h1><p class="muted" style="margin:4px 0 0">Masuk untuk membuat atau meninjau request cetak.</p></div>
+      <label class="f">Username<input class="input" name="username" autocomplete="username" autocapitalize="none" required autofocus></label>
       <label class="f">Password<input class="input" name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary lg">Masuk</button>
       <p class="muted small">Belum punya akun? Hubungi admin.</p>
@@ -212,7 +237,7 @@ function renderLogin(app) {
   $('#lf').onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    await busy(e.submitter, async () => {
+    await busy(e.submitter || $('#lf button'), async () => {
       const r = await api('/api/login', { method: 'POST', body: Object.fromEntries(fd) });
       state.user = r.user;
       const me = await api('/api/me'); state.suppliers = me.suppliers;
@@ -227,42 +252,58 @@ async function getBrands(force) {
 }
 
 // ---------------- home ----------------
+const STAT_ICON = {
+  pending: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  approved: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  sent: '<path d="M3 12h11M10 6l6 6-6 6"/><path d="M20 5v14"/>',
+  done: '<path d="M4 12l5 5L20 6"/><path d="M4 18h16" opacity=".5"/>',
+};
 async function viewHome(main) {
   const [stats, reqs] = await Promise.all([api('/api/stats'), api('/api/requests?limit=8')]);
   const s = stats.byStatus || {};
   const u = state.user;
+  const hour = new Date().getHours();
+  const greet = hour < 11 ? 'Selamat pagi' : hour < 15 ? 'Selamat siang' : hour < 18 ? 'Selamat sore' : 'Selamat malam';
   main.innerHTML = `
-  <div class="page-head"><div><h1>Halo, ${esc(u.name)}</h1><p>${esc(ROLE[u.role])} · ${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p></div>
-    <a class="btn primary lg" href="#/baru">+ Buat Request Cetak</a></div>
+  <section class="hero">
+    <div><p class="hero-k">${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+      <h1>${greet}, ${esc(u.name.split(' ')[0])}!</h1>
+      <p>${esc(ROLE[u.role])} · ${fmtNum(stats.brands)} brand · ${fmtNum(stats.products)} produk · ${fmtNum(stats.variants)} file desain siap dipesan.</p></div>
+    <a class="btn accent lg" href="#/baru">+ Buat Request Cetak</a>
+  </section>
   ${stats.awaiting_me ? `<div class="callout warn" style="margin-bottom:16px"><b>${stats.awaiting_me} request</b> menunggu ACC & tanda tangan Anda. <a href="#/persetujuan">Tinjau sekarang →</a></div>` : ''}
-  <div class="grid4" style="margin-bottom:18px">
+  <div class="stats">
     ${[['pending', 'Menunggu persetujuan'], ['approved', 'Disetujui, siap ke vendor'], ['sent', 'Dikirim ke vendor'], ['done', 'Selesai']]
-      .map(([k, l]) => `<a class="card stat" style="text-decoration:none;color:inherit" href="#/request?status=${k}"><div class="n">${fmtNum(s[k] || 0)}</div><div class="l">${l}</div></a>`).join('')}
+      .map(([k, l]) => `<a class="card stat st-${k}" href="#/request?status=${k}"><span class="st-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${STAT_ICON[k]}</svg></span>
+        <span><span class="n">${fmtNum(s[k] || 0)}</span><span class="l">${l}</span></span></a>`).join('')}
   </div>
   <div class="card">
     <div class="card-head"><h2>Request terbaru</h2><a href="#/request" class="small">Lihat semua →</a></div>
     ${requestTable(reqs)}
-  </div>
-  <p class="muted small" style="margin-top:14px">Katalog: ${fmtNum(stats.brands)} brand · ${fmtNum(stats.products)} produk · ${fmtNum(stats.variants)} file sticker.</p>`;
+  </div>`;
   bindRequestRows(main);
 }
 
 function requestTable(rows, { showRequester = true } = {}) {
   if (!rows.length) return '<div class="empty">Belum ada request.</div>';
-  return `<div class="table-wrap"><table class="t"><thead><tr><th>No. Request</th><th>Tanggal</th>${showRequester ? '<th>Pemohon</th>' : ''}<th>Isi</th><th>Supplier</th><th>Persetujuan</th><th>Status</th></tr></thead><tbody>
+  return `<div class="table-wrap"><table class="t cards-sm"><thead><tr><th>No. Request</th><th>Tanggal</th>${showRequester ? '<th>Pemohon</th>' : ''}<th>Isi</th><th>Supplier</th><th>Persetujuan</th><th>Status</th></tr></thead><tbody>
   ${rows.map(r => {
     const ap = Object.fromEntries((r.approval_summary || '').split(',').filter(Boolean).map(x => x.split(':')));
-    return `<tr class="click" data-id="${r.id}">
-      <td><b class="mono">${esc(r.number)}</b></td><td>${fmtDate(r.request_date)}</td>
-      ${showRequester ? `<td>${esc(r.requester_name)}<div class="muted small">${esc(r.division || '')}</div></td>` : ''}
-      <td>${fmtNum(r.item_count)} item · ${fmtNum(r.total_qty)} pcs<div class="muted small">${esc((r.brands || '').replace(/,/g, ', '))}</div></td>
-      <td class="small">${esc((r.suppliers || '').replace(/,/g, ', '))}</td>
-      <td class="small">${APPROVERS.map(a => `<span title="${ROLE[a]}" style="margin-right:6px">${ap[a] === 'approved' ? '✅' : ap[a] === 'rejected' ? '⛔' : '⬜'} ${ROLE[a].split(' ')[0]}</span>`).join('')}</td>
-      <td>${badge(r.status)}</td></tr>`;
+    return `<tr class="click" data-id="${r.id}" tabindex="0">
+      <td class="cell-head"><b class="mono">${esc(r.number)}</b> <span class="only-sm">${badge(r.status)}</span></td>
+      <td data-label="Tanggal">${fmtDate(r.request_date)}</td>
+      ${showRequester ? `<td data-label="Pemohon">${esc(r.requester_name)}<div class="muted small">${esc(r.division || '')}</div></td>` : ''}
+      <td data-label="Isi">${fmtNum(r.item_count)} item · ${fmtNum(r.total_qty)} pcs<div class="muted small">${esc((r.brands || '').replace(/,/g, ', '))}</div></td>
+      <td data-label="Supplier" class="small">${esc((r.suppliers || '').replace(/,/g, ', '))}</td>
+      <td data-label="Persetujuan" class="small"><span class="ap-dots">${APPROVERS.map(a => `<span class="ap-dot ${ap[a] || ''}" title="${ROLE[a]}: ${ap[a] === 'approved' ? 'disetujui' : ap[a] === 'rejected' ? 'ditolak' : 'belum'}">${ROLE[a].split(' ')[0]}</span>`).join('')}</span></td>
+      <td class="hide-sm">${badge(r.status)}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 function bindRequestRows(root) {
-  $$('tr[data-id]', root).forEach(tr => tr.onclick = () => openRequest(tr.dataset.id));
+  $$('tr[data-id]', root).forEach(tr => {
+    tr.onclick = () => openRequest(tr.dataset.id);
+    tr.onkeydown = e => { if (e.key === 'Enter') openRequest(tr.dataset.id); };
+  });
 }
 
 // ---------------- sticker picker (shared) ----------------
@@ -498,16 +539,16 @@ function renderRequestModal(m, r, reload) {
       ${r.notes ? `<dt>Catatan</dt><dd style="font-weight:400">${esc(r.notes)}</dd>` : ''}
       ${r.status_note ? `<dt>Catatan status</dt><dd style="font-weight:400">${esc(r.status_note)}</dd>` : ''}
     </dl>
-    <div class="card"><div class="table-wrap"><table class="t"><thead><tr><th></th><th>Sticker</th><th>Ukuran</th><th>Jumlah</th><th>Supplier</th><th>Batch / Exp</th>${isAdmin && editable ? '<th></th>' : ''}</tr></thead><tbody>
+    <div class="card"><div class="table-wrap"><table class="t cards-sm items-t"><thead><tr><th></th><th>Sticker</th><th>Ukuran</th><th>Jumlah</th><th>Supplier</th><th>Batch / Exp</th>${isAdmin && editable ? '<th></th>' : ''}</tr></thead><tbody>
     ${r.items.map(it => `<tr>
-      <td><span class="thumb lg" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}" data-caption="${esc(it.variant_name)}"></span></td>
-      <td><div class="small muted">${esc(it.brand)} ${pkgBadge(it.package_type)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b><div class="small">${esc(it.variant_name)}${it.volume ? ' · ' + esc(it.volume) : ''}</div>
+      <td class="cell-thumb"><span class="thumb lg" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}" data-caption="${esc(it.variant_name)}"></span></td>
+      <td class="cell-main"><div class="small muted">${esc(it.brand)} ${pkgBadge(it.package_type)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b><div class="small">${esc(it.variant_name)}${it.volume ? ' · ' + esc(it.volume) : ''}</div>
         ${it.notes ? `<div class="small muted">Catatan: ${esc(it.notes)}</div>` : ''}
         <div class="row small" style="margin-top:4px">${it.drive_link ? `<a href="${esc(it.drive_link)}" target="_blank" rel="noopener">${ICON.drive} File mentah</a>` : ''}
         ${it.generated_uuid ? `<a href="/files/${esc(it.generated_uuid)}/${encodeURIComponent(it.generated_name)}" target="_blank" rel="noopener"><b>${ICON.pdf} File siap cetak</b></a>` : ''}</div></td>
-      <td>${it.dimension ? `<span class="dim">${esc(it.dimension)}</span>` : '-'}</td>
-      <td><b>${fmtNum(it.qty)}</b> pcs</td><td>${esc(it.supplier)}</td>
-      <td class="mono small" style="white-space:nowrap">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')}<br>EXP ${esc(it.exp_code || '-')}` : '<span class="muted" style="font-family:inherit">Belum diisi</span>'}</td>
+      <td data-label="Ukuran">${it.dimension ? `<span class="dim">${esc(it.dimension)}</span>` : '-'}</td>
+      <td data-label="Jumlah"><b>${fmtNum(it.qty)}</b> pcs</td><td data-label="Supplier">${esc(it.supplier)}</td>
+      <td data-label="Batch / Exp" class="mono small" style="white-space:nowrap">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')}<br>EXP ${esc(it.exp_code || '-')}` : '<span class="muted" style="font-family:inherit">Belum diisi</span>'}</td>
       ${isAdmin && editable ? `<td><button class="btn sm primary" data-gen="${it.id}">${it.generated_uuid ? 'Ubah' : 'Isi'} Batch/Exp</button></td>` : ''}
     </tr>`).join('')}</tbody></table></div></div>
     <div><h3 style="margin-bottom:8px">Persetujuan & tanda tangan</h3>
@@ -819,7 +860,7 @@ async function openPurchaseRequest(r, supplier, reload) {
   const v = d.vendor || {};
   const m = modal(`Purchase Request — ${esc(supplier.replace(/^Lainnya:\s*/, ''))}`, `
     <div class="callout small">Dokumen formal ber-kop <b>PT SAINSGO KARYA INDONESIA</b> untuk dikirim ke vendor. Data vendor tersimpan otomatis untuk PR berikutnya.
-      Kop surat, alamat kirim, dan ketentuan bisa diatur di menu <a href="#/kop">Kop Surat & PR</a>.</div>
+      Kop surat dan alamat kirim bisa diatur di menu <a href="#/kop">Kop Surat & PR</a>.</div>
     <h3>Vendor</h3>
     <div class="grid2">
       <label class="f">Nama vendor<input class="input" id="pr-vname" value="${esc(v.name || '')}"></label>
@@ -829,38 +870,31 @@ async function openPurchaseRequest(r, supplier, reload) {
     </div>
     <label class="f">Alamat vendor<textarea class="input" id="pr-vaddr" style="min-height:52px">${esc(v.address || '')}</textarea></label>
     <h3>Detail PR</h3>
-    <div class="grid3">
+    <div class="grid2">
       <label class="f">Tanggal PR<input class="input" type="date" id="pr-date" value="${esc(d.pr_date)}"></label>
-      <label class="f">Tanggal dibutuhkan / kirim<input class="input" type="date" id="pr-deliv" value="${esc(d.delivery_date || '')}"></label>
-      <label class="f">Termin pembayaran<input class="input" id="pr-pay" value="${esc(d.payment_terms || '')}" placeholder="mis. 50% DP, pelunasan saat barang diterima"></label>
+      <label class="f">Tanggal dibutuhkan<input class="input" type="date" id="pr-deliv" value="${esc(d.delivery_date || '')}"></label>
     </div>
     <label class="f">Alamat pengiriman<textarea class="input" id="pr-daddr" style="min-height:52px">${esc(d.delivery_address || '')}</textarea></label>
-    <h3>Item <span class="hint muted small">(harga opsional — kosongkan bila menunggu penawaran vendor)</span></h3>
-    <div class="table-wrap"><table class="t"><thead><tr><th>Item</th><th style="width:110px">Qty</th><th style="width:90px">Satuan</th><th style="width:140px">Harga satuan (Rp)</th><th>Spesifikasi / bahan</th></tr></thead><tbody>
+    <h3>Item</h3>
+    <div class="table-wrap"><table class="t cards-sm"><thead><tr><th>Item</th><th style="width:120px">Jumlah</th><th style="width:100px">Satuan</th><th>Spesifikasi / bahan</th></tr></thead><tbody>
     ${d.items.map(it => `<tr data-item="${it.id}">
-      <td><div class="row"><span class="thumb" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}"></span><div><b class="small">${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b>
+      <td data-label="Item"><div class="row"><span class="thumb" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}"></span><div><b class="small">${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b>
         <div class="small">${pkgBadge(it.package_type, true)} <span class="mono">${esc(it.dimension || '-')}</span></div>
         <div class="small muted mono">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')} · EXP ${esc(it.exp_code || '-')}` : 'Batch/exp belum diisi'}</div></div></div></td>
-      <td><input class="input" type="number" min="1" data-f="qty" value="${it.qty}"></td>
-      <td><input class="input" data-f="unit" value="pcs"></td>
-      <td><input class="input" inputmode="numeric" data-f="unit_price" placeholder="—"></td>
-      <td><input class="input" data-f="spec" value="${esc(it.notes || '')}" placeholder="mis. vinyl glossy, die-cut"></td></tr>`).join('')}</tbody></table></div>
+      <td data-label="Jumlah"><input class="input" type="number" min="1" data-f="qty" value="${it.qty}"></td>
+      <td data-label="Satuan"><input class="input" data-f="unit" value="pcs"></td>
+      <td data-label="Spesifikasi"><input class="input" data-f="spec" value="${esc(it.notes || '')}" placeholder="mis. vinyl glossy, die-cut"></td></tr>`).join('')}</tbody></table></div>
     ${d.items.some(i => !i.generated_uuid) ? '<div class="callout warn small">Sebagian item belum punya file siap cetak (batch/exp belum di-generate). PR tetap bisa dibuat; link file master Google Drive akan dicantumkan.</div>' : ''}
-    <div class="grid3">
-      <label class="f">PPN (%)<input class="input" type="number" min="0" max="100" step="0.01" id="pr-tax" value="0"></label>
-      <label class="f" style="grid-column:span 2">Catatan untuk vendor<input class="input" id="pr-notes" placeholder="opsional"></label>
-    </div>`,
+    <label class="f">Catatan untuk vendor <span class="hint">(opsional)</span><input class="input" id="pr-notes"></label>`,
   { wide: true, foot: '<button class="btn" data-close>Batal</button><button class="btn primary" id="pr-go">Buat Purchase Request (PDF)</button>' });
   $('#pr-go', m.el).onclick = e => busy(e.target, async () => {
     const items = $$('tr[data-item]', m.el).map(tr => ({
-      id: +tr.dataset.item, qty: $('[data-f=qty]', tr).value, unit: $('[data-f=unit]', tr).value,
-      unit_price: $('[data-f=unit_price]', tr).value.replace(/[^\d]/g, ''), spec: $('[data-f=spec]', tr).value,
+      id: +tr.dataset.item, qty: $('[data-f=qty]', tr).value, unit: $('[data-f=unit]', tr).value, spec: $('[data-f=spec]', tr).value,
     }));
     const pr = await api(`/api/requests/${r.id}/purchase-requests`, { method: 'POST', body: {
       supplier, vendor_name: $('#pr-vname', m.el).value, vendor_contact: $('#pr-vcontact', m.el).value, vendor_phone: $('#pr-vphone', m.el).value,
       vendor_email: $('#pr-vemail', m.el).value, vendor_address: $('#pr-vaddr', m.el).value, pr_date: $('#pr-date', m.el).value,
-      delivery_date: $('#pr-deliv', m.el).value, payment_terms: $('#pr-pay', m.el).value, delivery_address: $('#pr-daddr', m.el).value,
-      tax_percent: $('#pr-tax', m.el).value, notes: $('#pr-notes', m.el).value, items,
+      delivery_date: $('#pr-deliv', m.el).value, delivery_address: $('#pr-daddr', m.el).value, notes: $('#pr-notes', m.el).value, items,
     } });
     m.close();
     toast(`Purchase Request ${pr.number} dibuat`);
@@ -875,30 +909,22 @@ async function viewCompany(main) {
   <div class="page-head"><div><h1>Kop Surat & Purchase Request</h1><p>Data perusahaan yang tercetak di kop Purchase Request ke vendor.</p></div></div>
   <div class="split">
     <form class="card card-pad stack" id="cf">
-      <div class="grid2">
-        <label class="f">Nama perusahaan<input class="input" name="company_name" value="${esc(c.company_name)}"></label>
-        <label class="f">Tagline / bidang usaha <span class="hint">(opsional)</span><input class="input" name="company_tagline" value="${esc(c.company_tagline)}"></label>
-      </div>
+      <label class="f">Nama perusahaan<input class="input" name="company_name" value="${esc(c.company_name)}"></label>
       <label class="f">Alamat kantor<textarea class="input" name="company_address" style="min-height:56px">${esc(c.company_address)}</textarea></label>
-      <div class="grid3">
-        <label class="f">Telepon<input class="input" name="company_phone" value="${esc(c.company_phone)}"></label>
-        <label class="f">Email<input class="input" name="company_email" value="${esc(c.company_email)}"></label>
-        <label class="f">Website<input class="input" name="company_website" value="${esc(c.company_website)}"></label>
-        <label class="f">NPWP <span class="hint">(opsional)</span><input class="input" name="company_npwp" value="${esc(c.company_npwp)}"></label>
+      <div class="grid2">
+        <label class="f">Email<input class="input" type="email" name="company_email" value="${esc(c.company_email)}"></label>
         <label class="f">Kota (untuk tanggal surat)<input class="input" name="pr_city" value="${esc(c.pr_city)}"></label>
-        <label class="f">Termin pembayaran default<input class="input" name="pr_payment_terms" value="${esc(c.pr_payment_terms)}"></label>
       </div>
       <label class="f">Alamat pengiriman default <span class="hint">(kosong = pakai alamat kantor)</span><textarea class="input" name="pr_delivery_address" style="min-height:56px">${esc(c.pr_delivery_address)}</textarea></label>
-      <label class="f">Ketentuan di PR <span class="hint">(satu baris = satu poin)</span><textarea class="input" name="pr_terms" style="min-height:120px">${esc(c.pr_terms)}</textarea></label>
       <div><button class="btn primary">Simpan</button></div>
     </form>
     <div class="card card-pad stack sticky">
       <h2>Logo</h2>
-      <div id="logo-prev" style="min-height:90px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:8px;padding:10px">
-        ${c.company_logo ? `<img src="${c.company_logo}" alt="Logo" style="max-height:90px;max-width:100%">` : '<span class="muted small">Belum ada logo — kop tampil tanpa logo (teks di tengah).</span>'}</div>
-      <div class="row"><label class="btn sm">Upload logo (PNG/JPG)<input type="file" accept="image/png,image/jpeg" id="logo" hidden></label>
-        ${c.company_logo ? '<button class="btn sm danger" id="logo-del" type="button">Hapus logo</button>' : ''}</div>
-      <p class="small muted" style="margin:0">Setelah disimpan, buka detail request yang sudah disetujui lalu klik <b>+ PR</b> untuk membuat Purchase Request.</p>
+      <div class="logo-prev"><img src="${c.company_logo}" alt="Logo perusahaan"></div>
+      <div class="small muted">${c.logo_is_default ? 'Logo Sainsgo (bawaan).' : 'Logo yang di-upload.'}</div>
+      <div class="row"><label class="btn sm">Ganti logo (PNG/JPG)<input type="file" accept="image/png,image/jpeg" id="logo" hidden></label>
+        ${c.logo_is_default ? '' : '<button class="btn sm" id="logo-del" type="button">Kembalikan logo bawaan</button>'}</div>
+      <p class="small muted" style="margin:0">Buat Purchase Request dari detail request yang sudah disetujui → tombol <b>+ PR</b>.</p>
     </div>
   </div>`;
   $('#cf').onsubmit = async e => {
@@ -912,7 +938,8 @@ async function viewCompany(main) {
     try { await api('/api/settings/company', { method: 'PUT', body: { company_logo: dataUrl } }); toast('Logo disimpan'); viewCompany(main); }
     catch (err) { toast(err.message, true); }
   };
-  $('#logo-del') && ($('#logo-del').onclick = async () => { await api('/api/settings/company', { method: 'PUT', body: { company_logo: '' } }); viewCompany(main); });
+  const del = $('#logo-del');
+  if (del) del.onclick = async () => { await api('/api/settings/company', { method: 'PUT', body: { company_logo: '' } }); viewCompany(main); };
 }
 
 // ---------------- reports ----------------

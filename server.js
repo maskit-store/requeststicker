@@ -616,23 +616,23 @@ app.put('/api/request-items/:id', auth('admin'), (req, res) => {
 });
 
 // ---------- company letterhead & vendors ----------
-const COMPANY_KEYS = ['company_name', 'company_tagline', 'company_address', 'company_phone', 'company_email', 'company_website', 'company_npwp',
-  'pr_city', 'pr_delivery_address', 'pr_payment_terms', 'pr_terms'];
+const COMPANY_KEYS = ['company_name', 'company_address', 'company_email', 'pr_city', 'pr_delivery_address'];
 const COMPANY_DEFAULTS = {
   company_name: 'PT SAINSGO KARYA INDONESIA',
-  pr_city: 'Jakarta',
-  pr_payment_terms: 'Sesuai kesepakatan',
-  pr_terms: [
-    'Barang dicetak sesuai file cetak terlampir (link file siap cetak) beserta ukuran, bahan, dan jumlah pada tabel di atas.',
-    'Vendor wajib mengirimkan proof/sampel cetak untuk disetujui sebelum produksi massal.',
-    'Nomor batch dan tanggal kedaluwarsa harus sesuai file cetak. Kesalahan cetak menjadi tanggung jawab vendor.',
-    'Mohon cantumkan nomor Purchase Request ini pada surat jalan dan invoice.',
-  ].join('\n'),
+  company_address: 'Jl. Raya Pasir Putih No. 147, Sawangan, Depok',
+  company_email: 'admin@sainsgo.com',
+  pr_city: 'Depok',
 };
+const DEFAULT_LOGO = (() => {
+  try { return 'data:image/png;base64,' + fs.readFileSync(path.join(__dirname, 'public', 'brand', 'sainsgo-logo.png')).toString('base64'); }
+  catch { return ''; }
+})();
 function companySettings() {
   const out = {};
-  for (const k of COMPANY_KEYS) out[k] = getSetting(k, COMPANY_DEFAULTS[k] || '');
-  out.company_logo = getSetting('company_logo', '');
+  for (const k of COMPANY_KEYS) out[k] = getSetting(k, '') || COMPANY_DEFAULTS[k] || '';
+  const custom = getSetting('company_logo', '');
+  out.company_logo = custom || DEFAULT_LOGO;
+  out.logo_is_default = !custom;
   return out;
 }
 app.get('/api/settings/company', auth('admin', 'purchasing'), (req, res) => res.json(companySettings()));
@@ -672,7 +672,7 @@ app.get('/api/requests/:id/purchase-requests/draft', auth('admin', 'purchasing')
   const c = companySettings();
   res.json({
     supplier, vendor, pr_date: today(), delivery_date: r.needed_date || '',
-    delivery_address: c.pr_delivery_address || c.company_address, payment_terms: c.pr_payment_terms,
+    delivery_address: c.pr_delivery_address || c.company_address,
     items: r.items.filter(i => i.supplier === supplier),
   });
 });
@@ -694,23 +694,21 @@ app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (re
     const o = overrides.get(it.id) || {};
     const qty = o.qty !== undefined ? parseInt(o.qty, 10) : it.qty;
     if (!(qty > 0)) throw bad(`Jumlah untuk ${it.product_name} tidak valid.`);
-    const price = o.unit_price === '' || o.unit_price == null ? null : Number(String(o.unit_price).replace(/[^\d.]/g, ''));
-    if (price !== null && !(price >= 0)) throw bad(`Harga untuk ${it.product_name} tidak valid.`);
     return {
       id: it.id, brand: it.brand, product_code: it.product_code, product_name: it.product_name, variant_name: it.variant_name,
       package_type: it.package_type, dimension: it.dimension, volume: it.volume, batch_number: it.batch_number, exp_code: it.exp_code,
       drive_link: it.drive_link, drive_file_id: it.drive_file_id, generated_uuid: it.generated_uuid, generated_name: it.generated_name,
-      qty, unit: str(o.unit, 20) || 'pcs', unit_price: price, spec: str(o.spec, 300) || it.notes || '',
+      qty, unit: str(o.unit, 20) || 'pcs', spec: str(o.spec, 300) || it.notes || '',
     };
   });
-  const tax = Math.min(Math.max(Number(b.tax_percent) || 0, 0), 100);
+  const tax = 0; // harga & pajak tidak dicantumkan di Purchase Request
   const id = tx(() => {
     const number = nextPrNumber(prDate);
     const rr = db.prepare(`INSERT INTO purchase_requests(number, request_id, supplier, vendor_name, vendor_address, vendor_contact, vendor_phone, vendor_email,
       pr_date, delivery_date, delivery_address, payment_terms, notes, tax_percent, items, created_by, created_by_name)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(number, r.id, supplier, vendorName, str(b.vendor_address, 500), str(b.vendor_contact, 100),
       str(b.vendor_phone, 50), str(b.vendor_email, 100), prDate, /^\d{4}-\d{2}-\d{2}$/.test(b.delivery_date || '') ? b.delivery_date : '',
-      str(b.delivery_address, 500), str(b.payment_terms, 200), str(b.notes, 2000), tax, JSON.stringify(items), req.user.id, req.user.name);
+      str(b.delivery_address, 500), '', str(b.notes, 2000), tax, JSON.stringify(items), req.user.id, req.user.name);
     db.prepare(`INSERT INTO vendors(name, address, contact_person, phone, email) VALUES(?,?,?,?,?)
       ON CONFLICT(name) DO UPDATE SET address=excluded.address, contact_person=excluded.contact_person, phone=excluded.phone,
       email=excluded.email, updated_at=datetime('now')`).run(vendorName, str(b.vendor_address, 500), str(b.vendor_contact, 100), str(b.vendor_phone, 50), str(b.vendor_email, 100));
