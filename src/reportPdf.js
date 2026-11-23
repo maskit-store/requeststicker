@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
 const { getThumbnail, imageKind } = require('./thumbs');
+const PACKAGE_LABEL = { sticker: 'Sticker / Label', flexible: 'Flexible Packaging', box: 'Box / Karton', other: 'Lainnya' };
 
 const ROLE_LABEL = { desainer: 'Desainer', manager_desain: 'Manager Desain', purchasing: 'Purchasing' };
 const APPROVER_ROLES = ['desainer', 'manager_desain', 'purchasing'];
@@ -105,7 +106,7 @@ async function requestPdf(stream, { request, items, approvals, baseUrl, supplier
       else doc.font('Helvetica').fontSize(7).fillColor(C.muted).text('(tidak ada pratinjau)', cx, cy + 20, { width: w, align: 'center' });
     });
     cell(cols[2], (cx, cy, w) => {
-      doc.font('Helvetica').fontSize(7.5).fillColor(C.accent).text(it.brand.toUpperCase(), cx, cy, { width: w });
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.accent).text(`${it.brand.toUpperCase()}  ·  ${(PACKAGE_LABEL[it.package_type] || 'Sticker / Label').toUpperCase()}`, cx, cy, { width: w });
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(`${it.product_code ? it.product_code + '. ' : ''}${it.product_name}`, { width: w, height: 24, ellipsis: true });
       doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text(`Variasi: ${it.variant_name || '-'}${it.volume ? ' · ' + it.volume : ''}`, { width: w, height: 20, ellipsis: true });
       if (it.notes) doc.fillColor(C.ink).text(`Catatan: ${it.notes}`, { width: w, height: 10, ellipsis: true });
@@ -199,7 +200,7 @@ async function recapPdf(stream, { requests, from, to, status, baseUrl }) {
       const y = doc.y;
       if (n++ % 2) doc.rect(left, y, W, h).fill(C.soft);
       const vals = [r.number, fmtDate(r.request_date), r.requester_name,
-        `${it.brand} · ${it.product_code ? it.product_code + '. ' : ''}${it.product_name} — ${it.variant_name || ''}`,
+        `${it.brand} · ${it.product_code ? it.product_code + '. ' : ''}${it.product_name} — ${it.variant_name || ''} [${PACKAGE_LABEL[it.package_type] || 'Sticker / Label'}]`,
         it.dimension || '-', Number(it.qty).toLocaleString('id-ID'), it.supplier,
         it.batch_number || it.exp_code ? `${it.batch_number || '-'} / ${it.exp_code || '-'}` : '-', STATUS_LABEL[r.status] || r.status];
       let x = left;

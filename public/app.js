@@ -30,6 +30,9 @@ const STATUS = {
 const ROLE = { admin: 'Admin', user: 'User / Tim', manager_desain: 'Manager Desain', purchasing: 'Purchasing', desainer: 'Desainer' };
 const APPROVERS = ['desainer', 'manager_desain', 'purchasing'];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
+const PKG = { sticker: 'Sticker / Label', flexible: 'Flexible Packaging', box: 'Box / Karton', other: 'Lainnya' };
+const PKG_SHORT = { sticker: 'Sticker', flexible: 'Flexible', box: 'Box', other: 'Lainnya' };
+const pkgBadge = (t, short = false) => t ? `<span class="pkg ${esc(t)}" title="${esc(PKG[t] || t)}">${esc((short ? PKG_SHORT : PKG)[t] || t)}</span>` : '';
 
 async function api(path, opts = {}) {
   const o = { method: 'GET', headers: {}, ...opts };
@@ -128,6 +131,7 @@ const ROUTES = {
   'laporan': { title: 'Laporan PDF', view: viewReports, roles: ['admin', ...APPROVERS] },
   'pengguna': { title: 'Pengguna', view: viewUsers, roles: ['admin'] },
   'profil': { title: 'Profil & Tanda Tangan', view: viewProfile },
+  'kop': { title: 'Kop Surat & Purchase Request', view: viewCompany, roles: ['admin'] },
 };
 const route = () => location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
 window.addEventListener('hashchange', () => {
@@ -166,6 +170,7 @@ function renderShell(app) {
     ['katalog', u.role === 'admin' ? 'Kelola Katalog' : 'Katalog Sticker'],
     ...(u.role === 'admin' || APPROVERS.includes(u.role) ? [['laporan', 'Laporan PDF']] : []),
     ...(u.role === 'admin' ? [['pengguna', 'Pengguna']] : []),
+    ...(u.role === 'admin' ? [['kop', 'Kop Surat & PR']] : []),
     ['profil', 'Profil & TTD'],
   ];
   app.innerHTML = `<div class="topbar"><button aria-label="Menu" id="menu">☰</button><b>Request Cetak Sticker</b></div>
@@ -274,7 +279,9 @@ async function stickerPicker(root, onPick) {
       <button class="chip on" data-b="">Semua</button>
       ${brands.filter(b => b.product_count > 0).map(b => `<button class="chip" data-b="${b.id}">${esc(b.name)}<small>${b.product_count}</small></button>`).join('')}
     </div>
-    <div class="step"><span class="num">2</span><h3>Cari nama sticker</h3></div>
+    <div class="row" id="pk-types"><span class="small muted">Jenis desain:</span>
+      <button class="chip on" data-t="">Semua</button>${Object.entries(PKG).filter(([k]) => k !== 'other').map(([k, v]) => `<button class="chip" data-t="${k}">${v}</button>`).join('')}</div>
+    <div class="step"><span class="num">2</span><h3>Cari nama sticker / kemasan</h3></div>
     <div class="search">${ICON.search}<input class="input" id="pk-q" placeholder="Ketik nama produk atau kode, mis. “baby wash”, “M141”, “abon”…" autocomplete="off"></div>
     <div class="results" id="pk-results"></div>
     <div id="pk-variants"></div>`;
@@ -286,11 +293,12 @@ async function stickerPicker(root, onPick) {
     const params = new URLSearchParams({ limit: 80 });
     if (st.brand) params.set('brand_id', st.brand);
     if (st.q) params.set('q', st.q);
+    if (st.type) params.set('package_type', st.type);
     const rows = await api('/api/products?' + params);
     if (my !== st.seq) return;
     resultsEl.innerHTML = rows.length ? rows.map(p => `
       <button class="pcard ${st.product?.id === p.id ? 'on' : ''}" data-p="${p.id}" type="button">
-        <div class="img" ${bgThumb(p.thumb_file_id, 300)}></div>
+        <div class="img" ${bgThumb(p.thumb_file_id, 300)}><span class="pkgs">${(p.package_types || '').split(',').filter(Boolean).map(t => pkgBadge(t, true)).join('')}</span></div>
         <div class="b"><span class="code">${esc(p.code || p.brand_name)}</span><span class="nm">${esc(p.name)}</span>
         <span class="sz">${esc((p.dimensions || '').split(' | ').slice(0, 2).join(' · ') || '—')}${p.variant_count > 1 ? ` · ${p.variant_count} variasi` : ''}</span></div>
       </button>`).join('') : '<div class="muted small">Tidak ada sticker yang cocok. Coba kata kunci lain atau pilih brand lain.</div>';
@@ -307,7 +315,8 @@ async function stickerPicker(root, onPick) {
         <div class="vcard ${st.variant?.id === v.id ? 'on' : ''}" data-v="${v.id}" role="button" tabindex="0">
           <div class="img" ${bgThumb(v.drive_file_id, 600)}>${v.drive_file_id ? `<button class="zoom" type="button" data-zoom="${esc(v.drive_file_id)}" data-caption="${esc(v.name)}">Perbesar</button>` : ''}</div>
           <div class="info">
-            <div class="row"><span class="radio"></span><b>${esc(v.name)}</b></div>
+            <div class="row"><span class="radio"></span>${pkgBadge(v.package_type)}</div>
+            <b>${esc(v.name)}</b>
             <div class="row">${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : '<span class="badge pending">Ukuran belum tercatat</span>'}
               ${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}${v.tags.map(t => `<span class="tag">${esc(t)}</span>`).join(' ')}</div>
             <div class="fname">${ICON.pdf} ${esc(v.file_name || '-')}</div>
@@ -320,9 +329,13 @@ async function stickerPicker(root, onPick) {
     });
     onPick({ product: p, variant: st.variant });
   }
+  $('#pk-types', root).onclick = e => {
+    const c = e.target.closest('.chip'); if (!c) return;
+    st.type = c.dataset.t; $$('#pk-types .chip', root).forEach(x => x.classList.toggle('on', x === c)); load();
+  };
   $('#pk-brands', root).onclick = e => {
     const c = e.target.closest('.chip'); if (!c) return;
-    st.brand = c.dataset.b; $$('.chip', root).forEach(x => x.classList.toggle('on', x === c)); load();
+    st.brand = c.dataset.b; $$('#pk-brands .chip', root).forEach(x => x.classList.toggle('on', x === c)); load();
   };
   $('#pk-q', root).oninput = e => { clearTimeout(st.timer); st.timer = setTimeout(() => { st.q = e.target.value.trim(); load(); }, 220); };
   resultsEl.onclick = e => { const c = e.target.closest('.pcard'); if (c) showProduct(c.dataset.p).catch(err => toast(err.message, true)); };
@@ -380,7 +393,7 @@ async function viewNewRequest(main) {
     const v = sel.variant, p = sel.product;
     $('#sel-summary').innerHTML = v ? `<div class="row"><span class="thumb" ${bgThumb(v.drive_file_id, 300)} data-zoom="${esc(v.drive_file_id)}" data-caption="${esc(v.name)}"></span>
       <div><b>${esc(p.brand_name)} · ${esc(p.code ? p.code + '. ' : '')}${esc(p.name)}</b><div class="small">${esc(v.name)}</div>
-      <div class="row" style="margin-top:4px">${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : ''}${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}</div></div></div>`
+      <div class="row" style="margin-top:4px">${pkgBadge(v.package_type)}${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : ''}${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}</div></div></div>`
       : p ? 'Pilih salah satu variasi di atas.' : 'Belum ada sticker dipilih.';
     $('#add').disabled = !(v && +$('#qty').value > 0 && supplier.value && (supplier.value !== 'Lainnya' || $('#sup-other').value.trim()));
   }
@@ -398,7 +411,7 @@ async function viewNewRequest(main) {
     $('#cart').innerHTML = cart.length ? cart.map((c, i) => `
       <div class="cart-item"><span class="thumb" ${bgThumb(c._v.drive_file_id, 300)} data-zoom="${esc(c._v.drive_file_id)}" data-caption="${esc(c._v.name)}"></span>
         <div><div class="small muted">${esc(c._p.brand_name)}</div><b>${esc(c._p.code ? c._p.code + '. ' : '')}${esc(c._p.name)}</b>
-          <div class="small">${esc(c._v.name)}</div>
+          <div class="small">${pkgBadge(c._v.package_type, true)} ${esc(c._v.name)}</div>
           <div class="row small" style="margin-top:4px">${c._v.dimension ? `<span class="dim">${esc(c._v.dimension)}</span>` : ''}<b>${fmtNum(c.qty)} pcs</b> · ${esc(c.supplier === 'Lainnya' ? c.supplier_other : c.supplier)}</div>
           ${c.notes ? `<div class="small muted">${esc(c.notes)}</div>` : ''}</div>
         <button class="btn ghost sm danger" data-rm="${i}" title="Hapus">✕</button></div>`).join('')
@@ -475,6 +488,7 @@ function renderRequestModal(m, r, reload) {
   const canSign = APPROVERS.includes(u.role) && (r.status === 'pending' || r.status === 'rejected');
   const suppliers = [...new Set(r.items.map(i => i.supplier))];
   const editable = !['sent', 'done', 'cancelled'].includes(r.status);
+  const canPR = ['admin', 'purchasing'].includes(u.role);
   $('.modal-head h2', m.el).innerHTML = `${esc(r.number)} ${badge(r.status)}`;
   $('.modal-body', m.el).innerHTML = `
     <dl class="kv">
@@ -487,7 +501,7 @@ function renderRequestModal(m, r, reload) {
     <div class="card"><div class="table-wrap"><table class="t"><thead><tr><th></th><th>Sticker</th><th>Ukuran</th><th>Jumlah</th><th>Supplier</th><th>Batch / Exp</th>${isAdmin && editable ? '<th></th>' : ''}</tr></thead><tbody>
     ${r.items.map(it => `<tr>
       <td><span class="thumb lg" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}" data-caption="${esc(it.variant_name)}"></span></td>
-      <td><div class="small muted">${esc(it.brand)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b><div class="small">${esc(it.variant_name)}${it.volume ? ' · ' + esc(it.volume) : ''}</div>
+      <td><div class="small muted">${esc(it.brand)} ${pkgBadge(it.package_type)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b><div class="small">${esc(it.variant_name)}${it.volume ? ' · ' + esc(it.volume) : ''}</div>
         ${it.notes ? `<div class="small muted">Catatan: ${esc(it.notes)}</div>` : ''}
         <div class="row small" style="margin-top:4px">${it.drive_link ? `<a href="${esc(it.drive_link)}" target="_blank" rel="noopener">${ICON.drive} File mentah</a>` : ''}
         ${it.generated_uuid ? `<a href="/files/${esc(it.generated_uuid)}/${encodeURIComponent(it.generated_name)}" target="_blank" rel="noopener"><b>${ICON.pdf} File siap cetak</b></a>` : ''}</div></td>
@@ -505,7 +519,18 @@ function renderRequestModal(m, r, reload) {
           <div class="nm">${a ? esc(a.user_name) : '—'}<div class="small muted" style="font-weight:400">${a ? fmtDate(a.signed_at, true) : ''}${a?.decision === 'approved' && a.note ? ' · ' + esc(a.note) : ''}</div></div></div>`;
       }).join('')}</div>
     </div>
-    ${r.status === 'approved' && isAdmin ? '<div class="callout ok">Semua pihak sudah ACC & tanda tangan. Unduh ringkasan PDF lalu teruskan ke vendor, kemudian tandai “Dikirim ke Vendor”.</div>' : ''}
+    ${r.status === 'approved' && isAdmin ? '<div class="callout ok">Semua pihak sudah ACC & tanda tangan. Buat <b>Purchase Request</b> untuk tiap vendor di bawah, kirimkan ke vendor, lalu tandai “Dikirim ke Vendor”.</div>' : ''}
+    ${canPR ? `<div class="card card-pad stack">
+      <div class="row between"><h3>Purchase Request ke vendor</h3>
+        ${['approved', 'sent', 'done'].includes(r.status) ? `<div class="row">${suppliers.map(sp => `<button class="btn sm primary" data-pr="${esc(sp)}">+ PR ${esc(sp.replace(/^Lainnya:\s*/, ''))}</button>`).join('')}</div>`
+          : '<span class="small muted">Tersedia setelah request disetujui 3 pihak.</span>'}</div>
+      ${r.purchase_requests.length ? `<div class="table-wrap"><table class="t"><tbody>${r.purchase_requests.map(p => `<tr>
+        <td><b class="mono">${esc(p.number)}</b><div class="small muted">${fmtDate(p.pr_date)} · dibuat ${esc(p.created_by_name)}</div></td>
+        <td>${esc(p.vendor_name)}</td>
+        <td style="text-align:right"><a class="btn sm" href="/api/purchase-requests/${p.id}/pdf" target="_blank" rel="noopener">${ICON.pdf} Lihat PDF</a>
+          <a class="btn sm" href="/api/purchase-requests/${p.id}/pdf?download=1">Download</a></td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="small muted">Belum ada Purchase Request.</div>'}
+    </div>` : ''}
     ${r.status === 'pending' && isAdmin && r.items.some(i => !i.generated_uuid) ? '<div class="callout warn">Isi nomor batch & kode expired untuk setiap sticker agar file siap cetak otomatis dibuat dan ikut tercantum di ringkasan PDF.</div>' : ''}`;
   const foot = [];
   foot.push(`<a class="btn" href="/api/requests/${r.id}/pdf" target="_blank" rel="noopener">${ICON.pdf} Ringkasan PDF</a>`);
@@ -527,6 +552,7 @@ function renderRequestModal(m, r, reload) {
     openGenerator({ variantId: it.variant_id, title: `${it.product_code ? it.product_code + '. ' : ''}${it.product_name} — ${it.variant_name}`, itemId: it.id, batch: it.batch_number, exp: it.exp_code, onDone: reload });
   });
   $('#sign', m.el)?.addEventListener('click', () => openSign(r, reload));
+  $$('[data-pr]', m.el).forEach(b => b.onclick = () => openPurchaseRequest(r, b.dataset.pr, reload));
   $('#rej', m.el)?.addEventListener('click', () => openReject(r, reload));
   $$('[data-st]', footEl).forEach(b => b.onclick = () => busy(b, async () => {
     const note = b.dataset.st === 'sent' ? prompt('Catatan pengiriman ke vendor (opsional):', '') : '';
@@ -668,9 +694,10 @@ async function viewCatalog(main) {
     if ($('#c-q').value.trim()) p.set('q', $('#c-q').value.trim());
     if ($('#c-empty')?.checked) p.set('include_empty', 1);
     const rows = await api('/api/products?' + p);
-    $('#c-list').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th></th><th>Kode</th><th>Produk</th><th>Brand</th><th>Ukuran</th><th>Variasi</th><th>Sumber</th></tr></thead><tbody>
+    $('#c-list').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th></th><th>Kode</th><th>Produk</th><th>Brand</th><th>Jenis</th><th>Ukuran</th><th>Variasi</th><th>Sumber</th></tr></thead><tbody>
       ${rows.map(p => `<tr class="click" data-p="${p.id}"><td><span class="thumb" ${bgThumb(p.thumb_file_id, 300)}></span></td><td class="mono"><b>${esc(p.code)}</b></td>
         <td><b>${esc(p.name)}</b>${p.description ? `<div class="small muted">${esc(p.description)}</div>` : ''}</td><td>${esc(p.brand_name)}</td>
+        <td>${(p.package_types || '').split(',').filter(Boolean).map(t => pkgBadge(t, true)).join(' ')}</td>
         <td class="mono small">${esc(p.dimensions || '-')}</td><td>${p.variant_count}</td>
         <td><span class="badge">${p.source === 'drive' ? 'Drive' : 'Manual'}</span></td></tr>`).join('')}</tbody></table></div>
       ${rows.length >= 300 ? '<div class="muted small" style="padding:10px 14px">Menampilkan 300 hasil pertama — persempit pencarian.</div>' : ''}` : '<div class="empty">Tidak ada produk.</div>';
@@ -710,8 +737,9 @@ async function openProduct(id, reload) {
     <h3>File sticker / variasi (${p.variants.length})</h3>
     <div class="variants">${p.variants.map(v => `<div class="vcard" style="cursor:default"><div class="img" ${bgThumb(v.drive_file_id, 600)}>${v.drive_file_id ? `<button class="zoom" data-zoom="${esc(v.drive_file_id)}" data-caption="${esc(v.name)}">Perbesar</button>` : ''}</div>
       <div class="info">${isAdmin ? `<label class="f">Nama variasi<input class="input" data-vn="${v.id}" value="${esc(v.name)}"></label>
-        <div class="grid2"><label class="f">Ukuran (dimensi)<input class="input mono" data-vd="${v.id}" value="${esc(v.dimension)}"></label><label class="f">Volume<input class="input" data-vv="${v.id}" value="${esc(v.volume)}"></label></div>`
-        : `<b>${esc(v.name)}</b><div class="row">${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : ''}${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}</div>`}
+        <div class="grid3"><label class="f">Jenis desain <span class="hint">${v.package_type_manual ? '(diatur manual)' : '(deteksi otomatis)'}</span><select class="input" data-vt="${v.id}">${Object.entries(PKG).map(([k, l]) => `<option value="${k}" ${v.package_type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label class="f">Ukuran (dimensi)<input class="input mono" data-vd="${v.id}" value="${esc(v.dimension)}"></label><label class="f">Volume<input class="input" data-vv="${v.id}" value="${esc(v.volume)}"></label></div>`
+        : `<b>${esc(v.name)}</b><div class="row">${pkgBadge(v.package_type)}${v.dimension ? `<span class="dim">${ICON.ruler} ${esc(v.dimension)}</span>` : ''}${v.volume ? `<span class="badge">${esc(v.volume)}</span>` : ''}</div>`}
         <div class="fname">${esc(v.file_name)}</div><div class="row">${v.drive_link ? `<a class="small" href="${esc(v.drive_link)}" target="_blank" rel="noopener">${ICON.drive} File mentah</a>` : ''}
         ${isAdmin ? `<button class="btn sm danger" data-vdel="${v.id}">Sembunyikan</button>` : ''}</div></div></div>`).join('') || '<div class="muted">Belum ada file.</div>'}</div>
     ${isAdmin ? `<details><summary class="btn sm">+ Tambah file / variasi</summary><div class="stack" style="margin-top:10px">${variantFields('nv')}<button class="btn" id="nv-add">Tambah variasi</button></div></details>` : ''}`,
@@ -721,7 +749,7 @@ async function openProduct(id, reload) {
   $('#p-save', m.el).onclick = e => busy(e.target, async () => {
     await api('/api/products/' + p.id, { method: 'PUT', body: { code: $('#e-code', m.el).value, name: $('#e-name', m.el).value, volume: $('#e-vol', m.el).value, drive_link: $('#e-link', m.el).value, description: $('#e-desc', m.el).value } });
     for (const v of p.variants) {
-      await api('/api/variants/' + v.id, { method: 'PUT', body: { name: $(`[data-vn="${v.id}"]`, m.el).value, dimension: $(`[data-vd="${v.id}"]`, m.el).value, volume: $(`[data-vv="${v.id}"]`, m.el).value } });
+      await api('/api/variants/' + v.id, { method: 'PUT', body: { name: $(`[data-vn="${v.id}"]`, m.el).value, dimension: $(`[data-vd="${v.id}"]`, m.el).value, volume: $(`[data-vv="${v.id}"]`, m.el).value, package_type: $(`[data-vt="${v.id}"]`, m.el).value } });
     }
     toast('Produk disimpan'); m.close(); reload();
   });
@@ -738,7 +766,8 @@ function variantFields(px) {
     <label class="f">Link file sticker di Google Drive<input class="input" id="${px}-link" placeholder="https://drive.google.com/file/d/…/view"></label>
     <label class="f">Nama variasi / nama file<input class="input" id="${px}-name" placeholder="mis. Label 250mL - 8,5 x 7 cm"></label>
     <label class="f">Ukuran (dimensi) <span class="hint">otomatis dari nama jika ada</span><input class="input mono" id="${px}-dim" placeholder="mis. 8,5 x 7 cm"></label>
-    <label class="f">Volume / variasi<input class="input" id="${px}-vol" placeholder="mis. 250 mL"></label></div>
+    <label class="f">Volume / variasi<input class="input" id="${px}-vol" placeholder="mis. 250 mL"></label>
+    <label class="f">Jenis desain<select class="input" id="${px}-type"><option value="">Otomatis dari nama file</option>${Object.entries(PKG).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label></div>
     <div id="${px}-prev"></div>`;
 }
 function bindVariantFields(root, px) {
@@ -753,7 +782,7 @@ function bindVariantFields(root, px) {
   $(`#${px}-link`, root).oninput = upd; $(`#${px}-name`, root).oninput = upd;
   $(`#${px}-dim`, root).oninput = e => (e.target.dataset.touched = 1);
 }
-const readVariantFields = (root, px) => ({ drive_link: $(`#${px}-link`, root).value, name: $(`#${px}-name`, root).value, dimension: $(`#${px}-dim`, root).value, volume: $(`#${px}-vol`, root).value });
+const readVariantFields = (root, px) => ({ drive_link: $(`#${px}-link`, root).value, name: $(`#${px}-name`, root).value, dimension: $(`#${px}-dim`, root).value, volume: $(`#${px}-vol`, root).value, package_type: $(`#${px}-type`, root).value || undefined });
 
 async function openAddProduct(reload) {
   const brands = await getBrands(true);
@@ -782,6 +811,108 @@ async function openAddProduct(reload) {
     } });
     state.brands = null; toast('Produk baru ditambahkan'); m.close(); reload();
   });
+}
+
+// ---------------- purchase request ----------------
+async function openPurchaseRequest(r, supplier, reload) {
+  const d = await api(`/api/requests/${r.id}/purchase-requests/draft?supplier=${encodeURIComponent(supplier)}`);
+  const v = d.vendor || {};
+  const m = modal(`Purchase Request — ${esc(supplier.replace(/^Lainnya:\s*/, ''))}`, `
+    <div class="callout small">Dokumen formal ber-kop <b>PT SAINSGO KARYA INDONESIA</b> untuk dikirim ke vendor. Data vendor tersimpan otomatis untuk PR berikutnya.
+      Kop surat, alamat kirim, dan ketentuan bisa diatur di menu <a href="#/kop">Kop Surat & PR</a>.</div>
+    <h3>Vendor</h3>
+    <div class="grid2">
+      <label class="f">Nama vendor<input class="input" id="pr-vname" value="${esc(v.name || '')}"></label>
+      <label class="f">Up. (contact person)<input class="input" id="pr-vcontact" value="${esc(v.contact_person || '')}"></label>
+      <label class="f">Telepon / WA<input class="input" id="pr-vphone" value="${esc(v.phone || '')}"></label>
+      <label class="f">Email<input class="input" id="pr-vemail" value="${esc(v.email || '')}"></label>
+    </div>
+    <label class="f">Alamat vendor<textarea class="input" id="pr-vaddr" style="min-height:52px">${esc(v.address || '')}</textarea></label>
+    <h3>Detail PR</h3>
+    <div class="grid3">
+      <label class="f">Tanggal PR<input class="input" type="date" id="pr-date" value="${esc(d.pr_date)}"></label>
+      <label class="f">Tanggal dibutuhkan / kirim<input class="input" type="date" id="pr-deliv" value="${esc(d.delivery_date || '')}"></label>
+      <label class="f">Termin pembayaran<input class="input" id="pr-pay" value="${esc(d.payment_terms || '')}" placeholder="mis. 50% DP, pelunasan saat barang diterima"></label>
+    </div>
+    <label class="f">Alamat pengiriman<textarea class="input" id="pr-daddr" style="min-height:52px">${esc(d.delivery_address || '')}</textarea></label>
+    <h3>Item <span class="hint muted small">(harga opsional — kosongkan bila menunggu penawaran vendor)</span></h3>
+    <div class="table-wrap"><table class="t"><thead><tr><th>Item</th><th style="width:110px">Qty</th><th style="width:90px">Satuan</th><th style="width:140px">Harga satuan (Rp)</th><th>Spesifikasi / bahan</th></tr></thead><tbody>
+    ${d.items.map(it => `<tr data-item="${it.id}">
+      <td><div class="row"><span class="thumb" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}"></span><div><b class="small">${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b>
+        <div class="small">${pkgBadge(it.package_type, true)} <span class="mono">${esc(it.dimension || '-')}</span></div>
+        <div class="small muted mono">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')} · EXP ${esc(it.exp_code || '-')}` : 'Batch/exp belum diisi'}</div></div></div></td>
+      <td><input class="input" type="number" min="1" data-f="qty" value="${it.qty}"></td>
+      <td><input class="input" data-f="unit" value="pcs"></td>
+      <td><input class="input" inputmode="numeric" data-f="unit_price" placeholder="—"></td>
+      <td><input class="input" data-f="spec" value="${esc(it.notes || '')}" placeholder="mis. vinyl glossy, die-cut"></td></tr>`).join('')}</tbody></table></div>
+    ${d.items.some(i => !i.generated_uuid) ? '<div class="callout warn small">Sebagian item belum punya file siap cetak (batch/exp belum di-generate). PR tetap bisa dibuat; link file master Google Drive akan dicantumkan.</div>' : ''}
+    <div class="grid3">
+      <label class="f">PPN (%)<input class="input" type="number" min="0" max="100" step="0.01" id="pr-tax" value="0"></label>
+      <label class="f" style="grid-column:span 2">Catatan untuk vendor<input class="input" id="pr-notes" placeholder="opsional"></label>
+    </div>`,
+  { wide: true, foot: '<button class="btn" data-close>Batal</button><button class="btn primary" id="pr-go">Buat Purchase Request (PDF)</button>' });
+  $('#pr-go', m.el).onclick = e => busy(e.target, async () => {
+    const items = $$('tr[data-item]', m.el).map(tr => ({
+      id: +tr.dataset.item, qty: $('[data-f=qty]', tr).value, unit: $('[data-f=unit]', tr).value,
+      unit_price: $('[data-f=unit_price]', tr).value.replace(/[^\d]/g, ''), spec: $('[data-f=spec]', tr).value,
+    }));
+    const pr = await api(`/api/requests/${r.id}/purchase-requests`, { method: 'POST', body: {
+      supplier, vendor_name: $('#pr-vname', m.el).value, vendor_contact: $('#pr-vcontact', m.el).value, vendor_phone: $('#pr-vphone', m.el).value,
+      vendor_email: $('#pr-vemail', m.el).value, vendor_address: $('#pr-vaddr', m.el).value, pr_date: $('#pr-date', m.el).value,
+      delivery_date: $('#pr-deliv', m.el).value, payment_terms: $('#pr-pay', m.el).value, delivery_address: $('#pr-daddr', m.el).value,
+      tax_percent: $('#pr-tax', m.el).value, notes: $('#pr-notes', m.el).value, items,
+    } });
+    m.close();
+    toast(`Purchase Request ${pr.number} dibuat`);
+    window.open(pr.pdf_url, '_blank');
+    await reload();
+  });
+}
+
+async function viewCompany(main) {
+  const c = await api('/api/settings/company');
+  main.innerHTML = `
+  <div class="page-head"><div><h1>Kop Surat & Purchase Request</h1><p>Data perusahaan yang tercetak di kop Purchase Request ke vendor.</p></div></div>
+  <div class="split">
+    <form class="card card-pad stack" id="cf">
+      <div class="grid2">
+        <label class="f">Nama perusahaan<input class="input" name="company_name" value="${esc(c.company_name)}"></label>
+        <label class="f">Tagline / bidang usaha <span class="hint">(opsional)</span><input class="input" name="company_tagline" value="${esc(c.company_tagline)}"></label>
+      </div>
+      <label class="f">Alamat kantor<textarea class="input" name="company_address" style="min-height:56px">${esc(c.company_address)}</textarea></label>
+      <div class="grid3">
+        <label class="f">Telepon<input class="input" name="company_phone" value="${esc(c.company_phone)}"></label>
+        <label class="f">Email<input class="input" name="company_email" value="${esc(c.company_email)}"></label>
+        <label class="f">Website<input class="input" name="company_website" value="${esc(c.company_website)}"></label>
+        <label class="f">NPWP <span class="hint">(opsional)</span><input class="input" name="company_npwp" value="${esc(c.company_npwp)}"></label>
+        <label class="f">Kota (untuk tanggal surat)<input class="input" name="pr_city" value="${esc(c.pr_city)}"></label>
+        <label class="f">Termin pembayaran default<input class="input" name="pr_payment_terms" value="${esc(c.pr_payment_terms)}"></label>
+      </div>
+      <label class="f">Alamat pengiriman default <span class="hint">(kosong = pakai alamat kantor)</span><textarea class="input" name="pr_delivery_address" style="min-height:56px">${esc(c.pr_delivery_address)}</textarea></label>
+      <label class="f">Ketentuan di PR <span class="hint">(satu baris = satu poin)</span><textarea class="input" name="pr_terms" style="min-height:120px">${esc(c.pr_terms)}</textarea></label>
+      <div><button class="btn primary">Simpan</button></div>
+    </form>
+    <div class="card card-pad stack sticky">
+      <h2>Logo</h2>
+      <div id="logo-prev" style="min-height:90px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:8px;padding:10px">
+        ${c.company_logo ? `<img src="${c.company_logo}" alt="Logo" style="max-height:90px;max-width:100%">` : '<span class="muted small">Belum ada logo — kop tampil tanpa logo (teks di tengah).</span>'}</div>
+      <div class="row"><label class="btn sm">Upload logo (PNG/JPG)<input type="file" accept="image/png,image/jpeg" id="logo" hidden></label>
+        ${c.company_logo ? '<button class="btn sm danger" id="logo-del" type="button">Hapus logo</button>' : ''}</div>
+      <p class="small muted" style="margin:0">Setelah disimpan, buka detail request yang sudah disetujui lalu klik <b>+ PR</b> untuk membuat Purchase Request.</p>
+    </div>
+  </div>`;
+  $('#cf').onsubmit = async e => {
+    e.preventDefault();
+    await busy(e.submitter, async () => { await api('/api/settings/company', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Kop surat disimpan'); });
+  };
+  $('#logo').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 1.4e6) return toast('Logo maksimal ±1,4 MB', true);
+    const dataUrl = await new Promise(res => { const rd = new FileReader(); rd.onload = () => res(rd.result); rd.readAsDataURL(f); });
+    try { await api('/api/settings/company', { method: 'PUT', body: { company_logo: dataUrl } }); toast('Logo disimpan'); viewCompany(main); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#logo-del') && ($('#logo-del').onclick = async () => { await api('/api/settings/company', { method: 'PUT', body: { company_logo: '' } }); viewCompany(main); });
 }
 
 // ---------------- reports ----------------

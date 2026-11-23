@@ -131,7 +131,47 @@ CREATE TABLE IF NOT EXISTS approvals (
   UNIQUE (request_id, role)
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS vendors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  address TEXT DEFAULT '',
+  contact_person TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS purchase_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  number TEXT NOT NULL UNIQUE,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  supplier TEXT NOT NULL,
+  vendor_name TEXT NOT NULL,
+  vendor_address TEXT DEFAULT '',
+  vendor_contact TEXT DEFAULT '',
+  vendor_phone TEXT DEFAULT '',
+  vendor_email TEXT DEFAULT '',
+  pr_date TEXT NOT NULL,
+  delivery_date TEXT DEFAULT '',
+  delivery_address TEXT DEFAULT '',
+  payment_terms TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  tax_percent REAL DEFAULT 0,
+  items TEXT NOT NULL DEFAULT '[]',
+  created_by INTEGER REFERENCES users(id),
+  created_by_name TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pr_request ON purchase_requests(request_id);
 `);
+
+// Lightweight migrations for databases created by earlier versions.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+ensureColumn('variants', 'package_type', "TEXT NOT NULL DEFAULT 'sticker'");
+ensureColumn('variants', 'package_type_manual', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('request_items', 'package_type', "TEXT DEFAULT ''");
 
 // ---- helpers ----
 function hashPassword(pw) {

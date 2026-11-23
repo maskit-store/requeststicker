@@ -80,6 +80,41 @@ function variantLabel(file, subPath) {
   return { base, tags: [...new Set(extra.filter(Boolean))] };
 }
 
+// ---- packaging type ----
+// 'sticker'  : sticker / label produk (ditempel ke botol, jar, pouch polos, dll)
+// 'flexible' : flexible packaging — pouch, standing pouch, sachet, three side seal, spout, kemasan cetak
+// 'box'      : box / karton lipat (dieline, ukuran 3 dimensi)
+// 'other'    : brosur dan materi lain
+const PACKAGING_TYPES = ['sticker', 'flexible', 'box', 'other'];
+// word boundaries that also treat "_" as a separator (e.g. "FIX_KEMASAN")
+const W = w => new RegExp(`(?<![A-Za-z])(?:${w})(?![A-Za-z])`, 'i');
+const PKG_RULES = [
+  ['flexible', /\((?:[^)]*[^A-Za-z])?(pouch|sachet|three side seal|3 side seal|standing pouch|spout)(?![A-Za-z])[^)]*\)/i],
+  ['sticker', /\((?:[^)]*[^A-Za-z])?(label|lebel|lable|stiker|sticker)(?![A-Za-z])[^)]*\)/i],
+  ['box', /\((?:[^)]*[^A-Za-z])?box(?![A-Za-z])[^)]*\)/i],
+  ['sticker', W('label|lebel|lable|stiker|sticker')],
+  ['flexible', W('pouch|sachet|three side seal|3 side seal|standing|spout|kemasan|package|packaging|flexi\\w*|gusset|zip ?lock|center seal|back seal')],
+  ['box', /(?<![A-Za-z])(box|dieline|karton)(?![A-Za-z])|\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?\s*[x×]\s*\d+/i],
+  ['other', W('brosur|brochure|brocure|leaflet|flyer')],
+];
+// Standard pouch sizes (13x20, 14x23, 20x30 ...) without any "label" wording are flexible packaging.
+function looksLikePouchSize(text) {
+  const m = String(text).match(/(\d+(?:[.,]\d+)?)\s*(?:cm)?\s*[x×X]\s*(\d+(?:[.,]\d+)?)\s*cm?/);
+  if (!m) return false;
+  const [a, b] = [m[1], m[2]].map(v => parseFloat(v.replace(',', '.'))).sort((x, y) => x - y);
+  return a >= 13 && b >= 19;
+}
+function classifyPackaging(fileName = '', subPath = [], productName = '') {
+  const file = String(fileName).replace(/\.[a-z0-9]{2,4}$/i, '');
+  const sources = [file, ...[...subPath].reverse(), productName];
+  for (const src of sources) {
+    if (!src) continue;
+    for (const [type, re] of PKG_RULES) if (re.test(src)) return type;
+  }
+  if (looksLikePouchSize(file) || looksLikePouchSize(productName)) return 'flexible';
+  return 'sticker';
+}
+
 function ext(name) {
   const m = name.match(FILE_EXT_RE);
   return m ? m[1].toLowerCase() : '';
@@ -97,7 +132,7 @@ function collectFiles(node, subPath = []) {
   return out;
 }
 
-function makeVariants(files, productVolume) {
+function makeVariants(files, productVolume, productName = '') {
   // Group .ai/.pdf/etc. with the same basename; prefer PDF/image as the preview file.
   const groups = new Map();
   for (const { file, subPath } of files) {
@@ -120,6 +155,7 @@ function makeVariants(files, productVolume) {
       dimension,
       volume: parseVolume(main.name) || productVolume || '',
       file_type: ext(main.name) || 'file',
+      package_type: classifyPackaging(main.name, subPath, productName),
       alt_files: fs.slice(1).map(f => ({ id: f.id, name: f.name, type: ext(f.name) })),
     });
   }
@@ -142,7 +178,7 @@ function buildCatalog(tree) {
         name,
         drive_folder_id: node.isFolder ? node.id : null,
         volume,
-        variants: makeVariants(files, volume),
+        variants: makeVariants(files, volume, node.name),
       });
     };
     for (const p of b.children || []) {
@@ -165,4 +201,4 @@ function buildCatalog(tree) {
   return brands;
 }
 
-module.exports = { buildCatalog, parseDimension, parseVolume, parseCode };
+module.exports = { classifyPackaging, PACKAGING_TYPES, buildCatalog, parseDimension, parseVolume, parseCode };

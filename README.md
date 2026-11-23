@@ -11,11 +11,15 @@ Web app admin & user untuk mengajukan cetak sticker kemasan, langsung dari datab
 - Setiap variasi menampilkan **gambar visual** (thumbnail dari Drive, bisa diperbesar) dan **ukuran dimensi** yang diambil dari nama file (mis. `8,5 x 7 cm`).
 - Isi **jumlah cetak**, **supplier** (Kame, PWD, Jawara Pouch, Flexypack Sachet & Pouch, Juke Sachet & Pouch, Lainnya), **tanggal request**; satu request bisa berisi banyak sticker.
 
+**Jenis desain** — setiap file otomatis dikenali sebagai **Sticker / Label**, **Flexible Packaging** (pouch, standing pouch, sachet, three side seal, spout), atau **Box / Karton**, dari nama file & folder (`(LABEL)`, `Lebel`, `(POUCH)`, `SACHET`, `KEMASAN`, `(BOX)`, ukuran 3 dimensi, dan ukuran pouch standar ≥ 13×19 cm). Label jenis tampil di setiap visual, di form request, di PDF, dan bisa dipakai sebagai filter. Admin dapat mengoreksi jenis per file di *Kelola Katalog*; koreksi manual tidak tertimpa saat sinkron.
+
 **Persetujuan** — Desainer, Manager Desain, dan Purchasing wajib **ACC + tanda tangan digital** (digambar di layar, bisa disimpan). Request baru bisa ditandai *Dikirim ke Vendor* setelah ketiganya menyetujui; satu penolakan (dengan alasan) menghentikan request.
 
 **Admin**
 - **Generator nomor batch & expired**: admin mengetik batch & expired baru → aplikasi mengunduh PDF asli dari Drive, mengganti teks `BN.xxxx` / `EXP.MM-YYYY` (font Courier New) di posisi, ukuran, warna, dan stroke yang sama, lalu memberi **link download PDF siap cetak**. Bisa dari detail request (per item) atau dari menu *Generator Batch & Exp*.
 - **Ringkasan PDF request** untuk vendor: visual sticker, ukuran, jumlah, supplier, batch/exp, **link file mentah Google Drive** + link file siap cetak, dan kotak tanda tangan 3 pihak. Bisa juga dipecah **per supplier**.
+- **Purchase Request ke vendor** (PDF formal ber-kop **PT SAINSGO KARYA INDONESIA**): dari detail request yang sudah disetujui 3 pihak, klik **+ PR <vendor>**. Berisi nomor `PR/SKI/YYYY/MM/NNNN`, data vendor (tersimpan untuk PR berikutnya), tabel barang (jenis kemasan, ukuran, batch/exp, qty, harga opsional, PPN, terbilang), alamat & tanggal kirim, link file siap cetak + file master Drive, ketentuan, tanda tangan (Dibuat · Diperiksa Manager Desain · Disetujui Purchasing · Konfirmasi Vendor), dan lampiran visual desain. Bisa dibuat oleh Admin atau Purchasing.
+- **Kop Surat & PR**: atur logo, alamat, telepon, email, NPWP, kota, alamat kirim default, termin pembayaran, dan poin ketentuan.
 - **Laporan PDF** rekap per periode/status.
 - **Kelola katalog**: tambah produk baru (nama, kode, detail, link Drive) → langsung tampil di sisi user. Atau tombol **Sinkron dari Google Drive** untuk membaca ulang folder database.
 - Kelola pengguna & role.

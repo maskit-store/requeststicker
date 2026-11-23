@@ -2,12 +2,14 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { PassThrough } = require('stream');
 const { db, hashPassword, verifyPassword, getSetting, setSetting, tx, DATA_DIR } = require('./src/db');
 const { syncFromDrive, seedIfEmpty, driveFileLink, driveFolderLink, isSyncing, DEFAULT_ROOT } = require('./src/catalogSync');
 const { getThumbnail } = require('./src/thumbs');
 const { requestPdf, recapPdf, APPROVER_ROLES, STATUS_LABEL } = require('./src/reportPdf');
 const { detect, replaceBatchExp, fontInfo } = require('./src/batchReplace');
-const { parseDimension, parseVolume } = require('./src/catalogParser');
+const { parseDimension, parseVolume, classifyPackaging, PACKAGING_TYPES } = require('./src/catalogParser');
+const { purchasePdf } = require('./src/purchasePdf');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 14;
@@ -32,6 +34,19 @@ if (db.prepare('SELECT COUNT(*) n FROM users').get().n === 0) {
 }
 const seeded = seedIfEmpty();
 if (seeded) console.log('Katalog awal dimuat dari seed:', seeded);
+// One-time: classify packaging type for catalogs imported before this feature existed.
+if (!getSetting('pkg_classified')) {
+  tx(() => {
+    const rows = db.prepare(`SELECT v.id, v.file_name, v.name, p.name AS product_name FROM variants v JOIN products p ON p.id = v.product_id
+                             WHERE v.package_type_manual = 0`).all();
+    const upd = db.prepare('UPDATE variants SET package_type = ? WHERE id = ?');
+    for (const r of rows) upd.run(classifyPackaging(r.file_name || r.name, [], r.product_name), r.id);
+  });
+  setSetting('pkg_classified', '1');
+}
+// Request items created before packaging types existed: copy the type from the catalog.
+db.exec(`UPDATE request_items SET package_type = (SELECT v.package_type FROM variants v WHERE v.id = request_items.variant_id)
+         WHERE (package_type IS NULL OR package_type = '') AND variant_id IS NOT NULL`);
 
 const app = express();
 app.set('trust proxy', true);
@@ -61,6 +76,17 @@ function extractDriveId(link) {
   const m = s.match(/\/(?:file\/d|folders|document\/d|spreadsheets\/d|presentation\/d)\/([A-Za-z0-9_-]{10,})/) || s.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
   if (m) return m[1];
   return /^[A-Za-z0-9_-]{20,}$/.test(s) ? s : '';
+}
+
+// Render a PDF fully in memory first, so a rendering error becomes a clear JSON error instead of a broken file.
+async function sendPdf(res, render) {
+  const out = new PassThrough();
+  const chunks = [];
+  out.on('data', c => chunks.push(c));
+  const finished = new Promise((ok, fail) => { out.on('end', ok); out.on('error', fail); });
+  await render(out);
+  await finished;
+  res.send(Buffer.concat(chunks));
 }
 
 // ---------- auth ----------
@@ -163,6 +189,10 @@ app.get('/api/products', auth(), (req, res) => {
   const where = ['p.active = 1', 'b.active = 1'];
   const args = [];
   if (req.query.brand_id) { where.push('p.brand_id = ?'); args.push(Number(req.query.brand_id)); }
+  if (PACKAGING_TYPES.includes(req.query.package_type)) {
+    where.push('EXISTS (SELECT 1 FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.package_type = ?)');
+    args.push(req.query.package_type);
+  }
   if (!req.query.include_empty) where.push('EXISTS (SELECT 1 FROM variants v WHERE v.product_id = p.id AND v.active = 1)');
   const q = str(req.query.q, 100);
   if (q) {
@@ -176,7 +206,8 @@ app.get('/api/products', auth(), (req, res) => {
   const rows = db.prepare(`SELECT p.*, b.name AS brand_name,
       (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count,
       (SELECT v.drive_file_id FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.drive_file_id IS NOT NULL ORDER BY v.id LIMIT 1) AS thumb_file_id,
-      (SELECT group_concat(d, ' | ') FROM (SELECT DISTINCT v.dimension AS d FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.dimension <> '')) AS dimensions
+      (SELECT group_concat(d, ' | ') FROM (SELECT DISTINCT v.dimension AS d FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.dimension <> '')) AS dimensions,
+      (SELECT group_concat(t) FROM (SELECT DISTINCT v.package_type AS t FROM variants v WHERE v.product_id = p.id AND v.active = 1)) AS package_types
     FROM products p JOIN brands b ON b.id = p.brand_id
     WHERE ${where.join(' AND ')}
     ORDER BY b.name, CASE WHEN p.code = '' THEN 1 ELSE 0 END, length(p.code), p.code, p.name LIMIT ?`).all(...args, limit);
@@ -214,6 +245,8 @@ function variantInput(body) {
     drive_link: fileId ? driveFileLink(fileId) : link,
     file_name: fileName,
     file_type: str(body.file_type, 10) || 'pdf',
+    package_type: PACKAGING_TYPES.includes(body.package_type) ? body.package_type : classifyPackaging(fileName || name, [], ''),
+    package_type_manual: PACKAGING_TYPES.includes(body.package_type) ? 1 : 0,
   };
 }
 
@@ -239,12 +272,14 @@ function insertVariant(pid, body) {
   if (!v.drive_file_id) throw bad(`Link Google Drive file untuk variasi "${v.name}" tidak valid. Gunakan link file (bukan folder).`);
   const ex = db.prepare('SELECT id, product_id FROM variants WHERE drive_file_id = ?').get(v.drive_file_id);
   if (ex) {
-    db.prepare(`UPDATE variants SET product_id=?, name=?, dimension=?, volume=?, tags=?, drive_link=?, file_name=?, file_type=?, active=1 WHERE id=?`)
-      .run(pid, v.name, v.dimension, v.volume, v.tags, v.drive_link, v.file_name, v.file_type, ex.id);
+    db.prepare(`UPDATE variants SET product_id=?, name=?, dimension=?, volume=?, tags=?, drive_link=?, file_name=?, file_type=?,
+      package_type=?, package_type_manual=?, active=1 WHERE id=?`)
+      .run(pid, v.name, v.dimension, v.volume, v.tags, v.drive_link, v.file_name, v.file_type, v.package_type, v.package_type_manual, ex.id);
     return ex.id;
   }
-  return Number(db.prepare(`INSERT INTO variants(product_id, name, dimension, volume, tags, drive_file_id, drive_link, file_name, file_type, source)
-    VALUES(?,?,?,?,?,?,?,?,?,'manual')`).run(pid, v.name, v.dimension, v.volume, v.tags, v.drive_file_id, v.drive_link, v.file_name, v.file_type).lastInsertRowid);
+  return Number(db.prepare(`INSERT INTO variants(product_id, name, dimension, volume, tags, drive_file_id, drive_link, file_name, file_type,
+    package_type, package_type_manual, source) VALUES(?,?,?,?,?,?,?,?,?,?,?,'manual')`)
+    .run(pid, v.name, v.dimension, v.volume, v.tags, v.drive_file_id, v.drive_link, v.file_name, v.file_type, v.package_type, v.package_type_manual).lastInsertRowid);
 }
 
 app.put('/api/products/:id', auth('admin'), (req, res) => {
@@ -270,9 +305,11 @@ app.put('/api/variants/:id', auth('admin'), (req, res) => {
   const v = db.prepare('SELECT * FROM variants WHERE id = ?').get(req.params.id);
   if (!v) throw new HttpError(404, 'Variasi tidak ditemukan.');
   const b = req.body;
-  db.prepare('UPDATE variants SET name=?, dimension=?, volume=?, active=? WHERE id=?').run(
+  const pkgChanged = PACKAGING_TYPES.includes(b.package_type) && b.package_type !== v.package_type;
+  db.prepare('UPDATE variants SET name=?, dimension=?, volume=?, active=?, package_type=?, package_type_manual=? WHERE id=?').run(
     str(b.name ?? v.name, 300) || v.name, b.dimension !== undefined ? str(b.dimension, 50) : v.dimension,
-    b.volume !== undefined ? str(b.volume, 50) : v.volume, b.active !== undefined ? (b.active ? 1 : 0) : v.active, v.id);
+    b.volume !== undefined ? str(b.volume, 50) : v.volume, b.active !== undefined ? (b.active ? 1 : 0) : v.active,
+    pkgChanged ? b.package_type : v.package_type, pkgChanged ? 1 : v.package_type_manual, v.id);
   res.json({ ok: true });
 });
 app.delete('/api/variants/:id', auth('admin'), (req, res) => {
@@ -414,6 +451,8 @@ function loadRequest(id) {
   r.items = db.prepare(`SELECT i.*, g.uuid AS generated_uuid, g.file_name AS generated_name, g.created_at AS generated_at
     FROM request_items i LEFT JOIN generated_files g ON g.id = i.generated_id WHERE i.request_id = ? ORDER BY i.id`).all(r.id);
   r.approvals = db.prepare('SELECT id, role, user_id, user_name, decision, note, signed_at, signature FROM approvals WHERE request_id = ?').all(r.id);
+  r.purchase_requests = db.prepare(`SELECT id, number, supplier, vendor_name, pr_date, created_by_name, created_at FROM purchase_requests
+    WHERE request_id = ? ORDER BY id DESC`).all(r.id);
   return r;
 }
 function canSee(user, r) {
@@ -459,9 +498,9 @@ app.post('/api/requests', auth(), (req, res) => {
       requestDate, neededDate, str(b.notes, 2000));
     const rid = Number(r.lastInsertRowid);
     const ins = db.prepare(`INSERT INTO request_items(request_id, variant_id, brand, product_code, product_name, variant_name, dimension, volume,
-      drive_file_id, drive_link, qty, supplier, notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      drive_file_id, drive_link, qty, supplier, notes, package_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const { v, qty, supplier, notes } of rows) {
-      ins.run(rid, v.id, v.brand, v.product_code, v.product_name, v.name, v.dimension, v.volume, v.drive_file_id || '', v.drive_link, qty, supplier, notes);
+      ins.run(rid, v.id, v.brand, v.product_code, v.product_name, v.name, v.dimension, v.volume, v.drive_file_id || '', v.drive_link, qty, supplier, notes, v.package_type);
     }
     return rid;
   });
@@ -576,6 +615,126 @@ app.put('/api/request-items/:id', auth('admin'), (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- company letterhead & vendors ----------
+const COMPANY_KEYS = ['company_name', 'company_tagline', 'company_address', 'company_phone', 'company_email', 'company_website', 'company_npwp',
+  'pr_city', 'pr_delivery_address', 'pr_payment_terms', 'pr_terms'];
+const COMPANY_DEFAULTS = {
+  company_name: 'PT SAINSGO KARYA INDONESIA',
+  pr_city: 'Jakarta',
+  pr_payment_terms: 'Sesuai kesepakatan',
+  pr_terms: [
+    'Barang dicetak sesuai file cetak terlampir (link file siap cetak) beserta ukuran, bahan, dan jumlah pada tabel di atas.',
+    'Vendor wajib mengirimkan proof/sampel cetak untuk disetujui sebelum produksi massal.',
+    'Nomor batch dan tanggal kedaluwarsa harus sesuai file cetak. Kesalahan cetak menjadi tanggung jawab vendor.',
+    'Mohon cantumkan nomor Purchase Request ini pada surat jalan dan invoice.',
+  ].join('\n'),
+};
+function companySettings() {
+  const out = {};
+  for (const k of COMPANY_KEYS) out[k] = getSetting(k, COMPANY_DEFAULTS[k] || '');
+  out.company_logo = getSetting('company_logo', '');
+  return out;
+}
+app.get('/api/settings/company', auth('admin', 'purchasing'), (req, res) => res.json(companySettings()));
+app.put('/api/settings/company', auth('admin'), (req, res) => {
+  for (const k of COMPANY_KEYS) if (req.body[k] !== undefined) setSetting(k, str(req.body[k], 3000));
+  if (req.body.company_logo !== undefined) {
+    const logo = String(req.body.company_logo || '');
+    if (logo && !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(logo)) throw bad('Logo harus berupa gambar PNG atau JPG.');
+    if (logo.length > 2_000_000) throw bad('Ukuran logo maksimal ±1,5 MB.');
+    setSetting('company_logo', logo);
+  }
+  res.json(companySettings());
+});
+app.get('/api/vendors', auth('admin', 'purchasing'), (req, res) => res.json(db.prepare('SELECT * FROM vendors ORDER BY name').all()));
+
+// ---------- purchase requests (to vendor) ----------
+const supplierToVendor = s => String(s || '').replace(/^Lainnya:\s*/, '');
+function nextPrNumber(date) {
+  const [y, m] = date.split('-');
+  const prefix = `PR/SKI/${y}/${m}/`;
+  const last = db.prepare('SELECT number FROM purchase_requests WHERE number LIKE ? ORDER BY number DESC LIMIT 1').get(prefix + '%');
+  return prefix + String(last ? parseInt(last.number.slice(prefix.length), 10) + 1 : 1).padStart(4, '0');
+}
+function loadPr(id) {
+  const pr = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(id);
+  if (!pr) return null;
+  pr.items = JSON.parse(pr.items || '[]');
+  return pr;
+}
+
+app.get('/api/requests/:id/purchase-requests/draft', auth('admin', 'purchasing'), (req, res) => {
+  const r = loadRequest(req.params.id);
+  if (!r) throw new HttpError(404, 'Request tidak ditemukan.');
+  const supplier = str(req.query.supplier, 100);
+  const vendorName = supplierToVendor(supplier);
+  const vendor = db.prepare('SELECT * FROM vendors WHERE name = ?').get(vendorName) || { name: vendorName };
+  const c = companySettings();
+  res.json({
+    supplier, vendor, pr_date: today(), delivery_date: r.needed_date || '',
+    delivery_address: c.pr_delivery_address || c.company_address, payment_terms: c.pr_payment_terms,
+    items: r.items.filter(i => i.supplier === supplier),
+  });
+});
+
+app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (req, res) => {
+  const r = loadRequest(req.params.id);
+  if (!r) throw new HttpError(404, 'Request tidak ditemukan.');
+  if (!['approved', 'sent', 'done'].includes(r.status)) {
+    throw bad('Purchase Request hanya bisa dibuat setelah request disetujui & ditandatangani Desainer, Manager Desain, dan Purchasing.');
+  }
+  const b = req.body;
+  const supplier = str(b.supplier, 100);
+  const srcItems = r.items.filter(i => i.supplier === supplier);
+  if (!srcItems.length) throw bad('Tidak ada item untuk supplier ini.');
+  const vendorName = str(b.vendor_name, 150) || supplierToVendor(supplier);
+  const prDate = /^\d{4}-\d{2}-\d{2}$/.test(b.pr_date || '') ? b.pr_date : today();
+  const overrides = new Map((Array.isArray(b.items) ? b.items : []).map(x => [Number(x.id), x]));
+  const items = srcItems.map(it => {
+    const o = overrides.get(it.id) || {};
+    const qty = o.qty !== undefined ? parseInt(o.qty, 10) : it.qty;
+    if (!(qty > 0)) throw bad(`Jumlah untuk ${it.product_name} tidak valid.`);
+    const price = o.unit_price === '' || o.unit_price == null ? null : Number(String(o.unit_price).replace(/[^\d.]/g, ''));
+    if (price !== null && !(price >= 0)) throw bad(`Harga untuk ${it.product_name} tidak valid.`);
+    return {
+      id: it.id, brand: it.brand, product_code: it.product_code, product_name: it.product_name, variant_name: it.variant_name,
+      package_type: it.package_type, dimension: it.dimension, volume: it.volume, batch_number: it.batch_number, exp_code: it.exp_code,
+      drive_link: it.drive_link, drive_file_id: it.drive_file_id, generated_uuid: it.generated_uuid, generated_name: it.generated_name,
+      qty, unit: str(o.unit, 20) || 'pcs', unit_price: price, spec: str(o.spec, 300) || it.notes || '',
+    };
+  });
+  const tax = Math.min(Math.max(Number(b.tax_percent) || 0, 0), 100);
+  const id = tx(() => {
+    const number = nextPrNumber(prDate);
+    const rr = db.prepare(`INSERT INTO purchase_requests(number, request_id, supplier, vendor_name, vendor_address, vendor_contact, vendor_phone, vendor_email,
+      pr_date, delivery_date, delivery_address, payment_terms, notes, tax_percent, items, created_by, created_by_name)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(number, r.id, supplier, vendorName, str(b.vendor_address, 500), str(b.vendor_contact, 100),
+      str(b.vendor_phone, 50), str(b.vendor_email, 100), prDate, /^\d{4}-\d{2}-\d{2}$/.test(b.delivery_date || '') ? b.delivery_date : '',
+      str(b.delivery_address, 500), str(b.payment_terms, 200), str(b.notes, 2000), tax, JSON.stringify(items), req.user.id, req.user.name);
+    db.prepare(`INSERT INTO vendors(name, address, contact_person, phone, email) VALUES(?,?,?,?,?)
+      ON CONFLICT(name) DO UPDATE SET address=excluded.address, contact_person=excluded.contact_person, phone=excluded.phone,
+      email=excluded.email, updated_at=datetime('now')`).run(vendorName, str(b.vendor_address, 500), str(b.vendor_contact, 100), str(b.vendor_phone, 50), str(b.vendor_email, 100));
+    return Number(rr.lastInsertRowid);
+  });
+  const pr = loadPr(id);
+  res.json({ ...pr, pdf_url: `/api/purchase-requests/${id}/pdf` });
+});
+
+app.get('/api/purchase-requests', auth('admin', 'purchasing', 'manager_desain', 'desainer'), (req, res) => {
+  res.json(db.prepare(`SELECT pr.id, pr.number, pr.supplier, pr.vendor_name, pr.pr_date, pr.created_by_name, pr.created_at, r.number AS request_number, r.id AS request_id
+    FROM purchase_requests pr JOIN requests r ON r.id = pr.request_id ORDER BY pr.id DESC LIMIT 200`).all());
+});
+
+app.get('/api/purchase-requests/:id/pdf', auth('admin', 'purchasing', 'manager_desain', 'desainer'), wrap(async (req, res) => {
+  const pr = loadPr(req.params.id);
+  if (!pr) throw new HttpError(404, 'Purchase Request tidak ditemukan.');
+  const r = loadRequest(pr.request_id);
+  res.type('application/pdf');
+  res.set('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${pr.number.replace(/\//g, '-')}.pdf"`);
+  const creatorSignature = db.prepare('SELECT signature FROM users WHERE id = ?').get(pr.created_by)?.signature || null;
+  await sendPdf(res, out => purchasePdf(out, { pr, request: r, company: companySettings(), baseUrl: baseUrl(req), creatorSignature }));
+}));
+
 // ---------- PDF reports ----------
 app.get('/api/requests/:id/pdf', auth(), wrap(async (req, res) => {
   const r = loadRequest(req.params.id);
@@ -583,7 +742,7 @@ app.get('/api/requests/:id/pdf', auth(), wrap(async (req, res) => {
   const supplier = str(req.query.supplier, 100);
   res.type('application/pdf');
   res.set('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${r.number}${supplier ? '-' + supplier.replace(/[^A-Za-z0-9]+/g, '_') : ''}.pdf"`);
-  await requestPdf(res, { request: r, items: r.items, approvals: r.approvals, baseUrl: baseUrl(req), supplier });
+  await sendPdf(res, out => requestPdf(out, { request: r, items: r.items, approvals: r.approvals, baseUrl: baseUrl(req), supplier }));
 }));
 
 app.get('/api/reports/pdf', auth('admin', ...APPROVER_ROLES), wrap(async (req, res) => {
@@ -596,7 +755,7 @@ app.get('/api/reports/pdf', auth('admin', ...APPROVER_ROLES), wrap(async (req, r
   const requests = ids.map(x => loadRequest(x.id));
   res.type('application/pdf');
   res.set('Content-Disposition', `inline; filename="laporan-request-sticker-${from || 'awal'}-${to || today()}.pdf"`);
-  await recapPdf(res, { requests, from, to, status, baseUrl: baseUrl(req) });
+  await sendPdf(res, out => recapPdf(out, { requests, from, to, status, baseUrl: baseUrl(req) }));
 }));
 
 app.get('/api/stats', auth(), (req, res) => {

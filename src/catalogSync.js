@@ -27,9 +27,10 @@ function importCatalog(brands) {
                                 updated_at=datetime('now') WHERE id=?`);
     const findVar = db.prepare('SELECT id FROM variants WHERE drive_file_id = ?');
     const insVar = db.prepare(`INSERT INTO variants(product_id, name, dimension, volume, tags, drive_file_id, drive_link,
-                               file_name, file_type, alt_files, source) VALUES(?,?,?,?,?,?,?,?,?,?,'drive')`);
+                               file_name, file_type, alt_files, package_type, source) VALUES(?,?,?,?,?,?,?,?,?,?,?,'drive')`);
     const updVar = db.prepare(`UPDATE variants SET product_id=?, name=?, dimension=?, volume=?, tags=?, drive_link=?,
-                               file_name=?, file_type=?, alt_files=?, active=1 WHERE id=?`);
+                               file_name=?, file_type=?, alt_files=?, active=1,
+                               package_type = CASE WHEN package_type_manual = 1 THEN package_type ELSE ? END WHERE id=?`);
 
     for (const b of brands) {
       let brow = findBrand.get(b.name);
@@ -50,10 +51,10 @@ function importCatalog(brands) {
             v.file_name, v.file_type, JSON.stringify(v.alt_files)];
           const vrow = findVar.get(v.drive_file_id);
           let vid;
-          if (vrow) { vid = vrow.id; updVar.run(...args, vid); }
+          if (vrow) { vid = vrow.id; updVar.run(...args, v.package_type, vid); }
           else {
             vid = Number(insVar.run(pid, v.name, v.dimension, v.volume, JSON.stringify(v.tags), v.drive_file_id,
-              driveFileLink(v.drive_file_id), v.file_name, v.file_type, JSON.stringify(v.alt_files)).lastInsertRowid);
+              driveFileLink(v.drive_file_id), v.file_name, v.file_type, JSON.stringify(v.alt_files), v.package_type).lastInsertRowid);
             stats.newVariants++;
           }
           seenVariants.add(vid);
