@@ -13,7 +13,7 @@ Web app admin & user untuk mengajukan cetak sticker kemasan, langsung dari datab
 
 **Jenis desain** — setiap file otomatis dikenali sebagai **Sticker / Label**, **Flexible Packaging** (pouch, standing pouch, sachet, three side seal, spout), atau **Box / Karton**, dari nama file & folder (`(LABEL)`, `Lebel`, `(POUCH)`, `SACHET`, `KEMASAN`, `(BOX)`, ukuran 3 dimensi, dan ukuran pouch standar ≥ 13×19 cm). Label jenis tampil di setiap visual, di form request, di PDF, dan bisa dipakai sebagai filter. Admin dapat mengoreksi jenis per file di *Kelola Katalog*; koreksi manual tidak tertimpa saat sinkron.
 
-**Persetujuan** — **Desainer dan Purchasing** wajib **ACC + tanda tangan digital** (Manager Desain dapat memantau semua request) (digambar di layar, bisa disimpan). Request baru bisa ditandai *Dikirim ke Vendor* setelah ketiganya menyetujui; satu penolakan (dengan alasan) menghentikan request.
+**Persetujuan** — **Desainer dan Purchasing** wajib **ACC + tanda tangan digital** (Manager Desain dapat memantau semua request) (digambar di layar, bisa disimpan). Request baru bisa ditandai *Dikirim ke Vendor* setelah keduanya menyetujui; satu penolakan (dengan alasan) menghentikan request.
 
 **Admin**
 - **Generator nomor batch & expired**: admin mengetik batch & expired baru → aplikasi mengunduh PDF asli dari Drive, mengganti teks `BN.xxxx` / `EXP.MM-YYYY` (font Courier New) di posisi, ukuran, warna, dan stroke yang sama, lalu memberi **link download PDF siap cetak**. Bisa dari detail request (per item) atau dari menu *Generator Batch & Exp*.
