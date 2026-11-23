@@ -160,3 +160,35 @@ test('shared history: every user sees all team orders, progress, and double-orde
   const seen = (await gudang('/api/requests')).data.find(x => x.id === r.id);
   assert.strictEqual(seen.status, 'done');
 });
+
+test('supplier can be left for Purchasing to choose; blocks PR / naik cetak until chosen', async () => {
+  const u = await login('user');
+  const v = (await u('/api/products/' + (await u('/api/products?q=M001')).data[0].id)).data.variants[0];
+  const r = (await u('/api/requests', { items: [{ variant_id: v.id, qty: 700, supplier: 'Belum ditentukan' }] })).data;
+  assert.strictEqual(r.items[0].supplier, 'Belum ditentukan');
+  for (const who of ['desainer', 'purchasing']) await (await login(who))(`/api/requests/${r.id}/approve`, { decision: 'approved', signature: SIG });
+  const pur = await login('purchasing');
+  assert.strictEqual((await pur(`/api/requests/${r.id}/purchase-requests`, { supplier: 'Belum ditentukan' })).status, 400);
+  assert.strictEqual((await pur(`/api/requests/${r.id}/status`, { status: 'sent' })).status, 400, 'cannot print before supplier chosen');
+  assert.strictEqual((await u('/api/request-items/' + r.items[0].id, { supplier: 'Kame' }, 'PUT')).status, 403, 'requester cannot choose');
+  assert.strictEqual((await pur('/api/request-items/' + r.items[0].id, { qty: 1 }, 'PUT')).status, 403, 'purchasing only changes supplier');
+  assert.strictEqual((await pur('/api/request-items/' + r.items[0].id, { supplier: 'Lainnya', supplier_other: 'Vendor Baru' }, 'PUT')).status, 200);
+  const after = (await pur(`/api/requests/${r.id}`)).data;
+  assert.strictEqual(after.items[0].supplier, 'Lainnya: Vendor Baru');
+  assert.strictEqual((await pur(`/api/requests/${r.id}/purchase-requests`, { supplier: 'Lainnya: Vendor Baru' })).status, 200);
+  assert.strictEqual((await pur(`/api/requests/${r.id}/status`, { status: 'sent' })).data.status, 'sent');
+});
+
+test('double-order check looks back 30 days', async () => {
+  const u = await login('user');
+  const v = (await u('/api/products/' + (await u('/api/products?q=M003')).data[0].id)).data.variants[0];
+  const iso = d => new Date(Date.now() + 7 * 3600e3 - d * 864e5).toISOString().slice(0, 10);
+  await u('/api/requests', { request_date: iso(40), items: [{ variant_id: v.id, qty: 10, supplier: 'Kame' }] });
+  let chk = (await u('/api/requests/check-duplicates', { items: [{ variant_id: v.id }] })).data;
+  assert.strictEqual(chk.days, 30);
+  assert.strictEqual(chk.results[0].matches.length, 0, '40 days ago is outside the window');
+  await u('/api/requests', { request_date: iso(20), items: [{ variant_id: v.id, qty: 10, supplier: 'Kame' }] });
+  chk = (await u('/api/requests/check-duplicates', { items: [{ variant_id: v.id }] })).data;
+  assert.strictEqual(chk.results[0].matches.length, 1, '20 days ago is inside the window');
+  assert.strictEqual((await u('/api/me')).data.duplicate_days, 30);
+});

@@ -13,7 +13,10 @@ const { purchasePdf } = require('./src/purchasePdf');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 14;
-const SUPPLIERS = ['Kame', 'PWD', 'Jawara Pouch', 'Flexypack Sachet & Pouch', 'Juke Sachet & Pouch', 'Lainnya'];
+// "Belum ditentukan": pemohon tidak tahu pasti suppliernya — dipilih tim Purchasing sebelum PR / naik cetak.
+const SUPPLIER_UNDECIDED = 'Belum ditentukan';
+const SUPPLIERS = ['Kame', 'PWD', 'Jawara Pouch', 'Flexypack Sachet & Pouch', 'Juke Sachet & Pouch', 'Lainnya', SUPPLIER_UNDECIDED];
+const DUPLICATE_WINDOW_DAYS = 30;
 const DIVISIONS = ['Tim Produksi', 'Tim Packing', 'Tim Gudang', 'Desain', 'Purchasing', 'Marketing'];
 const ROLES = ['admin', 'user', 'manager_desain', 'purchasing', 'desainer'];
 const GEN_DIR = path.join(DATA_DIR, 'generated');
@@ -126,7 +129,7 @@ app.post('/api/logout', (req, res) => {
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
   res.json({ ok: true });
 });
-app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS, divisions: DIVISIONS }));
+app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, suppliers: SUPPLIERS, supplier_undecided: SUPPLIER_UNDECIDED, divisions: DIVISIONS, duplicate_days: DUPLICATE_WINDOW_DAYS }));
 app.get('/api/me/signature', auth(), (req, res) => res.json({ signature: req.user.signature || null }));
 app.put('/api/me/signature', auth(), (req, res) => {
   const sig = String(req.body.signature || '');
@@ -614,6 +617,9 @@ app.post('/api/requests/:id/status', auth('admin', 'purchasing'), (req, res) => 
     if (status === 'sent') throw bad('Request wajib disetujui & ditandatangani Desainer dan Purchasing sebelum naik cetak.');
     throw bad(`Tidak bisa mengubah status dari "${STATUS_LABEL[r.status]}" ke "${STATUS_LABEL[status]}".`);
   }
+  if (status === 'sent' && r.items.some(i => i.supplier === SUPPLIER_UNDECIDED)) {
+    throw bad('Masih ada item dengan supplier "Belum ditentukan". Purchasing perlu memilih suppliernya dulu.');
+  }
   const note = str(req.body.note, 500);
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.date || '') ? req.body.date : today();
   if (status === 'sent') {
@@ -675,7 +681,7 @@ function findPreviousOrders(item, days, excludeRequestId = 0) {
     ORDER BY r.request_date DESC, r.id DESC LIMIT 10`).all(...args, since, excludeRequestId);
 }
 app.post('/api/requests/check-duplicates', auth(), (req, res) => {
-  const days = Math.min(Math.max(parseInt(req.body.days, 10) || 60, 1), 365);
+  const days = Math.min(Math.max(parseInt(req.body.days, 10) || DUPLICATE_WINDOW_DAYS, 1), 365);
   const items = Array.isArray(req.body.items) ? req.body.items.slice(0, 100) : [];
   res.json({ days, results: items.map((it, index) => ({ index, matches: findPreviousOrders(it, days) })) });
 });
@@ -689,8 +695,8 @@ app.post('/api/requests/:id/cancel', auth(), (req, res) => {
   res.json(loadRequest(r.id));
 });
 
-// Admin can adjust qty/supplier/batch of an item while the request is not yet sent.
-app.put('/api/request-items/:id', auth('admin'), (req, res) => {
+// Admin / Purchasing can adjust qty/supplier/batch of an item while the request is not yet sent.
+app.put('/api/request-items/:id', auth('admin', 'purchasing'), (req, res) => {
   const it = db.prepare('SELECT i.*, r.status FROM request_items i JOIN requests r ON r.id = i.request_id WHERE i.id = ?').get(req.params.id);
   if (!it) throw new HttpError(404, 'Item tidak ditemukan.');
   if (['sent', 'done', 'cancelled'].includes(it.status)) throw bad('Request sudah dikirim/selesai, item tidak bisa diubah.');
@@ -701,6 +707,9 @@ app.put('/api/request-items/:id', auth('admin'), (req, res) => {
   if (b.supplier !== undefined) {
     if (!SUPPLIERS.includes(supplier)) throw bad('Supplier tidak valid.');
     if (supplier === 'Lainnya') { const o = str(b.supplier_other, 100); if (!o) throw bad('Tuliskan nama supplier.'); supplier = `Lainnya: ${o}`; }
+  }
+  if (req.user.role === 'purchasing' && (b.batch_number !== undefined || b.exp_code !== undefined || b.qty !== undefined)) {
+    throw new HttpError(403, 'Purchasing hanya dapat mengubah supplier.');
   }
   db.prepare('UPDATE request_items SET qty=?, supplier=?, batch_number=?, exp_code=? WHERE id=?').run(
     qty, supplier, b.batch_number !== undefined ? str(b.batch_number, 40) : it.batch_number, b.exp_code !== undefined ? str(b.exp_code, 40) : it.exp_code, it.id);
@@ -779,6 +788,7 @@ app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (re
   const supplier = str(b.supplier, 100);
   const srcItems = r.items.filter(i => i.supplier === supplier);
   if (!srcItems.length) throw bad('Tidak ada item untuk supplier ini.');
+  if (supplier === SUPPLIER_UNDECIDED) throw bad('Pilih supplier untuk item yang masih "Belum ditentukan" sebelum membuat Purchase Request.');
   const vendorName = str(b.vendor_name, 150) || supplierToVendor(supplier);
   const prDate = /^\d{4}-\d{2}-\d{2}$/.test(b.pr_date || '') ? b.pr_date : today();
   const overrides = new Map((Array.isArray(b.items) ? b.items : []).map(x => [Number(x.id), x]));

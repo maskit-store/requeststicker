@@ -30,6 +30,9 @@ const STATUS = {
 const ROLE = { admin: 'Admin', user: 'User / Tim', manager_desain: 'Manager Desain', purchasing: 'Purchasing', desainer: 'Desainer' };
 const APPROVERS = ['desainer', 'purchasing'];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
+const UNDECIDED = 'Belum ditentukan';
+const supOption = sp => (sp === UNDECIDED ? 'Belum tahu — biar Purchasing yang pilih' : sp);
+const supHtml = sp => (sp === UNDECIDED ? '<span class="badge pending" title="Supplier akan dipilih tim Purchasing">Belum ditentukan · dipilih Purchasing</span>' : esc(sp));
 
 // Progress: Diajukan → ACC Desainer → ACC Purchasing → Naik Cetak → Terkirim
 function progressSteps(r) {
@@ -171,7 +174,7 @@ window.addEventListener('hashchange', () => {
 });
 
 async function boot() {
-  try { const me = await api('/api/me'); state.user = me.user; state.suppliers = me.suppliers; state.divisions = me.divisions || []; }
+  try { const me = await api('/api/me'); state.user = me.user; state.suppliers = me.suppliers; state.divisions = me.divisions || []; state.dupDays = me.duplicate_days || 30; }
   catch { state.user = null; }
   render();
 }
@@ -474,7 +477,7 @@ async function viewNewRequest(main) {
         <div id="dup-warn"></div>
         <div class="grid3">
           <label class="f">Jumlah cetak (pcs)<input class="input" id="qty" type="number" min="1" step="1" inputmode="numeric" placeholder="mis. 1000"></label>
-          <label class="f">Supplier<select class="input" id="supplier"><option value="">— Pilih supplier —</option>${state.suppliers.map(s => `<option>${esc(s)}</option>`).join('')}</select></label>
+          <label class="f">Supplier<select class="input" id="supplier"><option value="">— Pilih supplier —</option>${state.suppliers.map(sp => `<option value="${esc(sp)}">${esc(supOption(sp))}</option>`).join('')}</select></label>
           <label class="f hidden" id="sup-other-wrap">Nama supplier lainnya<input class="input" id="sup-other" placeholder="Nama vendor"></label>
         </div>
         <label class="f">Catatan item <span class="hint">(opsional)</span><input class="input" id="item-note" placeholder="mis. bahan transparan, finishing glossy"></label>
@@ -605,7 +608,7 @@ async function viewNewRequest(main) {
         : `<span class="thumb" ${bgThumb(c._v.drive_file_id, 300)} data-zoom="${esc(c._v.drive_file_id)}" data-caption="${esc(c._v.name)}"></span>`}
         <div><div class="small muted">${esc(c._p.brand_name)} ${c._manual ? '<span class="tag manual">Input manual</span>' : ''}</div><b>${esc(c._p.code ? c._p.code + '. ' : '')}${esc(c._p.name)}</b>
           <div class="small">${pkgBadge(c._v.package_type, true)} ${esc(c._v.name)}</div>
-          <div class="row small" style="margin-top:4px">${c._v.dimension ? `<span class="dim">${esc(c._v.dimension)}</span>` : ''}<b>${fmtNum(c.qty)} pcs</b> · ${esc(c.supplier === 'Lainnya' ? c.supplier_other : c.supplier)}</div>
+          <div class="row small" style="margin-top:4px">${c._v.dimension ? `<span class="dim">${esc(c._v.dimension)}</span>` : ''}<b>${fmtNum(c.qty)} pcs</b> · ${c.supplier === 'Lainnya' ? esc(c.supplier_other) : supHtml(c.supplier)}</div>
           ${c.notes ? `<div class="small muted">${esc(c.notes)}</div>` : ''}</div>
         <button class="btn ghost sm danger" data-rm="${i}" title="Hapus" aria-label="Hapus item">✕</button></div>`).join('')
       : '<div class="empty">Belum ada item. Pilih dari database atau isi manual, lalu klik “Tambahkan”.</div>';
@@ -673,7 +676,7 @@ async function viewHistory(main) {
           <b>${esc(h.product_code ? h.product_code + '. ' : '')}${esc(h.product_name)}</b><div class="small">${esc(h.variant_name || '')}${h.dimension ? ' · ' + esc(h.dimension) : ''}</div></div></div></td>
         <td data-label="Jumlah"><b>${fmtNum(h.qty)}</b> pcs</td>
         <td data-label="Dipesan oleh">${esc(h.requester_name)}<div class="small muted">${esc(h.division || '')}</div></td>
-        <td data-label="Supplier" class="small">${esc(h.supplier)}</td>
+        <td data-label="Supplier" class="small">${supHtml(h.supplier)}</td>
         <td data-label="Progress">${progressMini(h)}</td></tr>`).join('')}</tbody></table></div>
       ${rows.length >= 300 ? '<div class="small muted" style="padding:10px 14px">Menampilkan 300 baris terbaru — persempit pencarian.</div>' : ''}`
       : '<div class="empty">Tidak ada riwayat yang cocok.</div>';
@@ -740,7 +743,8 @@ function renderRequestModal(m, r, reload) {
   const isAdmin = u.role === 'admin';
   const mine = r.approvals.find(a => a.role === u.role);
   const canSign = APPROVERS.includes(u.role) && (r.status === 'pending' || r.status === 'rejected');
-  const suppliers = [...new Set(r.items.map(i => i.supplier))];
+  const suppliers = [...new Set(r.items.map(i => i.supplier))].filter(sp => sp !== UNDECIDED);
+  const undecided = r.items.filter(i => i.supplier === UNDECIDED).length;
   const editable = !['sent', 'done', 'cancelled'].includes(r.status);
   const canPR = ['admin', 'purchasing'].includes(u.role);
   $('.modal-head h2', m.el).innerHTML = `${esc(r.number)} ${badge(r.status)}`;
@@ -762,7 +766,7 @@ function renderRequestModal(m, r, reload) {
         <div class="row small" style="margin-top:4px">${it.drive_link ? `<a href="${esc(it.drive_link)}" target="_blank" rel="noopener">${ICON.drive} File mentah</a>` : ''}
         ${it.generated_uuid ? `<a href="/files/${esc(it.generated_uuid)}/${encodeURIComponent(it.generated_name)}" target="_blank" rel="noopener"><b>${ICON.pdf} File siap cetak</b></a>` : ''}</div></td>
       <td data-label="Ukuran">${it.dimension ? `<span class="dim">${esc(it.dimension)}</span>` : '-'}</td>
-      <td data-label="Jumlah"><b>${fmtNum(it.qty)}</b> pcs</td><td data-label="Supplier">${esc(it.supplier)}</td>
+      <td data-label="Jumlah"><b>${fmtNum(it.qty)}</b> pcs</td><td data-label="Supplier"><div>${supHtml(it.supplier)}</div>${canPR && editable ? `<button class="btn sm ${it.supplier === UNDECIDED ? 'accent' : 'ghost'}" data-sup="${it.id}" style="margin-top:4px">${it.supplier === UNDECIDED ? 'Pilih supplier' : 'Ubah'}</button>` : ''}</td>
       <td data-label="Batch / Exp" class="mono small" style="white-space:nowrap">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')}<br>EXP ${esc(it.exp_code || '-')}` : '<span class="muted" style="font-family:inherit">Belum diisi</span>'}</td>
       ${isAdmin && editable ? `<td>${it.variant_id ? `<button class="btn sm primary" data-gen="${it.id}">${it.generated_uuid ? 'Ubah' : 'Isi'} Batch/Exp</button>`
         : `<button class="btn sm" data-bn="${it.id}">Catat Batch/Exp</button>`}</td>` : ''}
@@ -777,6 +781,7 @@ function renderRequestModal(m, r, reload) {
       }).join('')}</div>
     </div>
     ${r.status === 'approved' && canPR ? '<div class="callout ok">Desainer & Purchasing sudah ACC. Buat <b>Purchase Request</b> untuk tiap vendor di bawah, kirim ke vendor, lalu tandai <b>Naik Cetak</b>.</div>' : ''}
+    ${undecided ? `<div class="callout warn">${undecided} item belum punya supplier (pemohon memilih “belum tahu”). ${canPR ? 'Klik <b>Pilih supplier</b> pada item tersebut sebelum membuat Purchase Request / menandai Naik Cetak.' : 'Tim Purchasing akan memilih suppliernya.'}</div>` : ''}
     ${canPR ? `<div class="card card-pad stack">
       <div class="row between"><h3>Purchase Request ke vendor</h3>
         ${['approved', 'sent', 'done'].includes(r.status) ? `<div class="row">${suppliers.map(sp => `<button class="btn sm primary" data-pr="${esc(sp)}">+ PR ${esc(sp.replace(/^Lainnya:\s*/, ''))}</button>`).join('')}</div>`
@@ -822,6 +827,21 @@ function renderRequestModal(m, r, reload) {
     });
   });
   $$('[data-pr]', m.el).forEach(b => b.onclick = () => openPurchaseRequest(r, b.dataset.pr, reload));
+  $$('[data-sup]', m.el).forEach(b => b.onclick = () => {
+    const it = r.items.find(x => x.id === +b.dataset.sup);
+    const cur = it.supplier.startsWith('Lainnya: ') ? 'Lainnya' : it.supplier;
+    const mm = modal('Pilih supplier', `
+      <div><div class="small muted">${esc(it.brand)}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b>
+        <div class="small">${pkgBadge(it.package_type, true)} ${esc(it.variant_name || '')} · ${fmtNum(it.qty)} pcs</div></div>
+      <label class="f">Supplier<select class="input" id="sp-sel">${state.suppliers.filter(sp => sp !== UNDECIDED).map(sp => `<option ${sp === cur ? 'selected' : ''}>${esc(sp)}</option>`).join('')}</select></label>
+      <label class="f ${cur === 'Lainnya' ? '' : 'hidden'}" id="sp-other-w">Nama supplier lainnya<input class="input" id="sp-other" value="${esc(it.supplier.replace(/^Lainnya:\s*/, '') !== it.supplier ? it.supplier.replace(/^Lainnya:\s*/, '') : '')}"></label>`,
+    { foot: '<button class="btn" data-close>Batal</button><button class="btn primary" id="sp-ok">Simpan supplier</button>' });
+    $('#sp-sel', mm.el).onchange = e => $('#sp-other-w', mm.el).classList.toggle('hidden', e.target.value !== 'Lainnya');
+    $('#sp-ok', mm.el).onclick = e => busy(e.target, async () => {
+      await api('/api/request-items/' + it.id, { method: 'PUT', body: { supplier: $('#sp-sel', mm.el).value, supplier_other: $('#sp-other', mm.el).value } });
+      mm.close(); toast('Supplier disimpan'); await reload(); refreshList();
+    });
+  });
   $('#rej', m.el)?.addEventListener('click', () => openReject(r, reload));
   $$('[data-st]', footEl).forEach(b => b.onclick = () => {
     const done = b.dataset.st === 'done';
