@@ -96,7 +96,7 @@ function modal(title, body, { wide = false, foot = '' } = {}) {
     <div class="modal-head"><h2>${title}</h2><button class="btn ghost sm" data-close aria-label="Tutup">✕</button></div>
     <div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}</div>`;
   const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = e => { if (e.key === 'Escape') close(); };
+  const onKey = e => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-bg')].pop() === bg) { e.stopImmediatePropagation(); close(); } };
   bg.addEventListener('click', e => { if (e.target === bg || e.target.closest('[data-close]')) close(); });
   document.addEventListener('keydown', onKey);
   document.body.appendChild(bg);
@@ -1119,11 +1119,11 @@ function openGenerator({ variantId, title, itemId, onDone }) {
     const q = r.quality;
     $('#g-result', m.el).innerHTML = `
       <div class="callout ok"><b>File siap cetak berhasil dibuat.</b> ${r.replaced.map(x => `<br><span class="mono">${esc(x.before)}</span> → <b class="mono">${esc(x.after)}</b>${x.stroke ? ' <span class="small">(stroke dipertahankan)</span>' : ''}`).join('')}
-        ${q ? `<br><span class="small">✅ Kualitas cetak terjaga: ${q.images} gambar identik byte-per-byte dengan file asli (resolusi & warna tidak diubah), ukuran halaman sama.</span>` : ''}</div>
-      <div class="row"><a class="btn primary" href="${esc(r.url)}?download=1">${ICON.pdf} Download PDF</a><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">Buka di tab baru</a>
+        ${q ? `<br><span class="small">✅ Kualitas cetak terjaga: ${q.images ? `${q.images} gambar identik byte-per-byte dengan file asli (resolusi & warna tidak diubah)` : 'desain vektor tidak diubah (tidak ada gambar raster)'}, ukuran halaman sama dengan file asli.</span>` : ''}</div>
+      <div class="row"><a class="btn primary" href="/files/${esc(r.uuid)}?download=1">${ICON.pdf} Download PDF</a><a class="btn" href="/files/${esc(r.uuid)}" target="_blank" rel="noopener">Buka di tab baru</a>
         <button class="btn" type="button" id="g-copy">Salin link</button><span class="muted small">${(r.size / 1024 / 1024).toFixed(2)} MB</span></div>
       <div class="mono small" style="word-break:break-all">${esc(r.url)}</div>
-      <iframe class="preview-frame" src="${esc(r.url)}#view=FitH" title="Pratinjau PDF"></iframe>`;
+      <iframe class="preview-frame" src="/files/${esc(r.uuid)}#view=FitH" title="Pratinjau PDF"></iframe>`;
     $('#g-copy', m.el).onclick = () => navigator.clipboard.writeText(r.url).then(() => toast('Link disalin'));
     toast('File siap cetak dibuat');
     onDone && onDone();
