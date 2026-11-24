@@ -826,12 +826,12 @@ function renderRequestModal(m, r, reload) {
   const isAdmin = u.role === 'admin';
   const canGen = isAdmin || u.role === 'desainer';
   const canDesign = canGen || u.role === 'manager_desain';
-  const actCol = (canGen || canDesign) && editable;
   const mine = r.approvals.find(a => a.role === u.role);
   const canSign = APPROVERS.includes(u.role) && (r.status === 'pending' || r.status === 'rejected');
   const suppliers = [...new Set(r.items.map(i => i.supplier))].filter(sp => sp !== UNDECIDED);
   const undecided = r.items.filter(i => i.supplier === UNDECIDED).length;
   const editable = !['sent', 'done', 'cancelled'].includes(r.status);
+  const actCol = (canGen || canDesign) && editable;
   const canPR = ['admin', 'purchasing'].includes(u.role);
   $('.modal-head h2', m.el).innerHTML = `${esc(r.number)} ${badge(r.status)}`;
   $('.modal-body', m.el).innerHTML = `
