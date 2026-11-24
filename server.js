@@ -48,6 +48,18 @@ if (db.prepare('SELECT COUNT(*) n FROM users').get().n === 0) {
     ? 'Akun awal dibuat: admin, desainer, manager, purchasing, user (password dari ADMIN_PASSWORD / DEFAULT_PASSWORD).'
     : 'Akun awal dibuat: admin/admin123 dan desainer, manager, purchasing, user (password: ganti123). SEGERA ganti password!');
 }
+// Darurat: lupa password admin → isi RESET_ADMIN_PASSWORD di .env, restart, login, lalu hapus baris itu.
+if (process.env.RESET_ADMIN_PASSWORD) {
+  const pw = String(process.env.RESET_ADMIN_PASSWORD);
+  if (pw.length < 6) console.error('RESET_ADMIN_PASSWORD minimal 6 karakter — diabaikan.');
+  else {
+    const admin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+    if (admin) db.prepare("UPDATE users SET password_hash = ?, active = 1, role = 'admin' WHERE id = ?").run(hashPassword(pw), admin.id);
+    else db.prepare("INSERT INTO users(username,name,password_hash,role,division) VALUES('admin','Administrator',?,'admin','Desain')").run(hashPassword(pw));
+    db.prepare('DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE username = ?)').run('admin');
+    console.log('Password akun "admin" di-reset dari RESET_ADMIN_PASSWORD. Hapus baris itu dari .env setelah berhasil login.');
+  }
+}
 const seeded = seedIfEmpty();
 if (seeded) console.log('Katalog awal dimuat dari seed:', seeded);
 { const n = sku.applySeedSkuMap(); if (n) console.log(`Kode SKU dari Google Sheet diterapkan ke ${n} produk.`); }
