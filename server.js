@@ -12,6 +12,8 @@ const { detect, replaceBatchExp, fontInfo, UPLOAD_FONT_DIR: FONT_DIR } = require
 const { parseDimension, parseVolume, classifyPackaging, PACKAGING_TYPES } = require('./src/catalogParser');
 const { purchasePdf } = require('./src/purchasePdf');
 const sku = require('./src/sku');
+const search = require('./src/search');
+const shelfLife = require('./src/shelfLife');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 14;
@@ -221,7 +223,7 @@ function variantRow(v) {
   return { ...v, tags: JSON.parse(v.tags || '[]'), alt_files: JSON.parse(v.alt_files || '[]') };
 }
 
-app.get('/api/products', auth(), (req, res) => {
+function searchProducts(req, limitDefault = 60) {
   const where = ['p.active = 1', 'b.active = 1'];
   const args = [];
   if (req.query.brand_id) { where.push('p.brand_id = ?'); args.push(Number(req.query.brand_id)); }
@@ -231,23 +233,37 @@ app.get('/api/products', auth(), (req, res) => {
   }
   if (!req.query.include_empty) where.push('EXISTS (SELECT 1 FROM variants v WHERE v.product_id = p.id AND v.active = 1)');
   const q = str(req.query.q, 100);
-  if (q) {
-    for (const word of q.split(/\s+/).filter(Boolean).slice(0, 6)) {
-      where.push(`(p.name LIKE ? OR p.code LIKE ? OR p.description LIKE ? OR EXISTS (SELECT 1 FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND (v.name LIKE ? OR v.file_name LIKE ?)))`);
-      const like = `%${word}%`;
-      args.push(like, like, like, like, like);
-    }
-  }
-  const limit = Math.min(Number(req.query.limit) || 60, 500);
+  const limit = Math.min(Number(req.query.limit) || limitDefault, 500);
   const rows = db.prepare(`SELECT p.*, b.name AS brand_name,
       (SELECT COUNT(*) FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS variant_count,
       (SELECT v.drive_file_id FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.drive_file_id IS NOT NULL ORDER BY v.id LIMIT 1) AS thumb_file_id,
       (SELECT group_concat(d, ' | ') FROM (SELECT DISTINCT v.dimension AS d FROM variants v WHERE v.product_id = p.id AND v.active = 1 AND v.dimension <> '')) AS dimensions,
       (SELECT group_concat(t) FROM (SELECT DISTINCT v.package_type AS t FROM variants v WHERE v.product_id = p.id AND v.active = 1)) AS package_types
+      ${q ? ", (SELECT group_concat(v.name || ' ' || v.file_name, ' ') FROM variants v WHERE v.product_id = p.id AND v.active = 1) AS search_text" : ''}
     FROM products p JOIN brands b ON b.id = p.brand_id
     WHERE ${where.join(' AND ')}
-    ORDER BY b.name, CASE WHEN p.code = '' THEN 1 ELSE 0 END, length(p.code), p.code, p.name LIMIT ?`).all(...args, limit);
-  res.json(rows.map(productRow));
+    ORDER BY b.name, CASE WHEN p.code = '' THEN 1 ELSE 0 END, length(p.code), p.code, p.name ${q ? '' : 'LIMIT ?'}`).all(...args, ...(q ? [] : [limit]));
+  if (!q) return { items: rows.map(productRow), did_you_mean: '' };
+  // Typo-tolerant ranking: "deterjen" → Detergent, "sampo" → Shampoo, "sunskrin" → Sunscreen.
+  const scored = [];
+  for (const r of rows) {
+    const doc = search.makeDoc([r.code, r.name, r.brand_name, r.volume, r.description, r.search_text]);
+    const m = search.scoreDoc(q, doc);
+    if (m) scored.push({ r, ...m });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const items = scored.slice(0, limit).map(x => { delete x.r.search_text; return productRow(x.r); });
+  return { items, did_you_mean: search.didYouMean(q, scored) };
+}
+app.get('/api/products', auth(), (req, res) => {
+  const { items, did_you_mean } = searchProducts(req);
+  if (did_you_mean) res.set('X-Did-You-Mean', encodeURIComponent(did_you_mean));
+  res.json(items);
+});
+// Suggestions while typing (search box dropdown).
+app.get('/api/products/suggest', auth(), (req, res) => {
+  const { items, did_you_mean } = searchProducts(req, 8);
+  res.json({ did_you_mean, items: items.map(p => ({ id: p.id, code: p.code, name: p.name, brand_id: p.brand_id, brand_name: p.brand_name, thumb_file_id: p.thumb_file_id, dimensions: p.dimensions })) });
 });
 
 // Codes a new product would get (shown in the form before saving).
@@ -457,11 +473,17 @@ app.post('/api/variants/:id/detect', auth('admin', 'desainer', 'manager_desain')
 // Batch plan per POB: production date + shelf life → batch (MMYY + seq + SKU) & expiry (+1 month reserve).
 app.get('/api/variants/:id/batch-plan', auth('admin', 'desainer'), wrap(async (req, res) => {
   const v = variantForGen(req.params.id);
-  const p = db.prepare('SELECT id, sku_code, shelf_months FROM products WHERE id = ?').get(v.product_id);
+  const p = db.prepare('SELECT id, name, volume, sku_code, shelf_months, shelf_category FROM products WHERE id = ?').get(v.product_id);
+  // Shelf-life category: saved on the product, else suggested from brand / name / volume (designer confirms).
+  const suggestion = shelfLife.suggestCategory({ brand: v.brand, name: `${v.product_name} ${v.name}`, volume: v.volume || p.volume });
+  const qCat = shelfLife.BY_ID[req.query.shelf_category] ? req.query.shelf_category : '';
+  const category = qCat || (shelfLife.BY_ID[p.shelf_category] ? p.shelf_category : suggestion.id);
+  const categoryMonths = shelfLife.BY_ID[category].years * 12;
+  const savedMonths = !qCat && p.shelf_category && p.shelf_months ? p.shelf_months : 0;
   const prodDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.prod_date || '') ? req.query.prod_date : today();
   const itemId = Number(req.query.request_item_id) || 0;
   const requestId = itemId ? db.prepare('SELECT request_id FROM request_items WHERE id = ?').get(itemId)?.request_id : 0;
-  const shelf = parseInt(req.query.shelf_months, 10) || p.shelf_months || 36;
+  const shelf = parseInt(req.query.shelf_months, 10) || savedMonths || categoryMonths;
   const seq = parseInt(req.query.seq, 10) || 0;
   const sugg = await sku.nextSeq(prodDate.slice(0, 7), requestId);
   const useSeq = seq || sugg.seq;
@@ -472,6 +494,8 @@ app.get('/api/variants/:id/batch-plan', auth('admin', 'desainer'), wrap(async (r
   const usedIn = batch ? await sku.batchExists(batch) : null;
   const mine = batch && itemId ? db.prepare('SELECT 1 FROM batch_records WHERE batch = ? AND request_item_id = ?').get(batch, itemId) : null;
   res.json({ sku_code: code, sku_missing: !p.sku_code, shelf_months: shelf, prod_date: prodDate, seq: useSeq, seq_suggestion: sugg,
+    categories: shelfLife.CATEGORIES, category, category_months: categoryMonths, category_source: qCat ? 'chosen' : p.shelf_category ? 'saved' : 'suggested',
+    suggestion: { ...suggestion, label: shelfLife.BY_ID[suggestion.id].label, years: shelfLife.BY_ID[suggestion.id].years },
     batch, exp, error, duplicate: usedIn && !mine ? usedIn : null });
 }));
 
@@ -523,6 +547,7 @@ app.post('/api/variants/:id/generate', auth('admin', 'desainer'), wrap(async (re
         product.id, v.id, item?.request_id || null, item?.id || null, id, req.user.name);
       db.prepare('UPDATE products SET shelf_months = ?, sku_code = CASE WHEN sku_code = \'\' OR sku_code IS NULL THEN ? ELSE sku_code END WHERE id = ?')
         .run(record.shelf_months, record.sku_code, product.id);
+      if (shelfLife.BY_ID[req.body.shelf_category]) db.prepare('UPDATE products SET shelf_category = ? WHERE id = ?').run(req.body.shelf_category, product.id);
     }
     return id;
   });
@@ -830,6 +855,25 @@ app.put('/api/request-items/:id', auth('admin', 'purchasing'), (req, res) => {
   res.json({ ok: true });
 });
 
+// Design team: per-item note to the vendor, replacement link for the final file, and corrected sticker details.
+// Only the request item is changed — the catalog and the original Google Drive file stay untouched.
+app.put('/api/request-items/:id/design', auth('admin', 'desainer', 'manager_desain'), (req, res) => {
+  const it = db.prepare('SELECT i.*, r.status FROM request_items i JOIN requests r ON r.id = i.request_id WHERE i.id = ?').get(req.params.id);
+  if (!it) throw new HttpError(404, 'Item tidak ditemukan.');
+  if (['sent', 'done', 'cancelled'].includes(it.status)) throw bad('Request sudah naik cetak / selesai, detail item tidak bisa diubah lagi.');
+  const b = req.body;
+  const pick = (k, max) => (b[k] !== undefined ? str(b[k], max) : it[k]);
+  const finalLink = pick('final_link', 1000);
+  if (finalLink && !/^https?:\/\/\S+$/i.test(finalLink)) throw bad('Link file jadi harus berupa URL lengkap (diawali https://).');
+  const dimension = pick('dimension', 100);
+  const orig = it.orig_dimension || (dimension !== it.dimension ? it.dimension : '');
+  db.prepare(`UPDATE request_items SET dimension=?, volume=?, variant_name=?, vendor_note=?, final_link=?, orig_dimension=?,
+      design_edited_by=?, design_edited_at=datetime('now') WHERE id=?`)
+    .run(dimension, pick('volume', 50), pick('variant_name', 300) || it.variant_name, pick('vendor_note', 1000), finalLink, orig, req.user.name, it.id);
+  db.prepare(`UPDATE requests SET updated_at=datetime('now') WHERE id=?`).run(it.request_id);
+  res.json({ ok: true });
+});
+
 // ---------- company letterhead & vendors ----------
 const COMPANY_KEYS = ['company_name', 'company_address', 'company_email', 'pr_city', 'pr_delivery_address'];
 const COMPANY_DEFAULTS = {
@@ -940,6 +984,7 @@ app.post('/api/requests/:id/purchase-requests', auth('admin', 'purchasing'), (re
       id: it.id, brand: it.brand, product_code: it.product_code, product_name: it.product_name, variant_name: it.variant_name,
       package_type: it.package_type, dimension: it.dimension, volume: it.volume, batch_number: it.batch_number, exp_code: it.exp_code,
       drive_link: it.drive_link, drive_file_id: it.drive_file_id, generated_uuid: it.generated_uuid, generated_name: it.generated_name,
+      vendor_note: it.vendor_note || '', final_link: it.final_link || '',
       is_manual: it.is_manual,
       qty, unit: str(o.unit, 20) || 'pcs', spec: str(o.spec, 300) || it.notes || '',
     };

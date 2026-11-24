@@ -188,6 +188,13 @@ ensureColumn('requests', 'delivered_note', "TEXT DEFAULT ''");
 // batch numbering (POB/KO/PD/001.01): SKU code per product, shelf life, and the register of issued batch numbers
 ensureColumn('products', 'sku_code', "TEXT DEFAULT ''");
 ensureColumn('products', 'shelf_months', 'INTEGER DEFAULT 0');
+ensureColumn('products', 'shelf_category', "TEXT DEFAULT ''");
+// Design-team edits on a request item (do not touch the catalog / Drive file)
+ensureColumn('request_items', 'vendor_note', "TEXT DEFAULT ''");
+ensureColumn('request_items', 'final_link', "TEXT DEFAULT ''");
+ensureColumn('request_items', 'orig_dimension', "TEXT DEFAULT ''");
+ensureColumn('request_items', 'design_edited_by', "TEXT DEFAULT ''");
+ensureColumn('request_items', 'design_edited_at', "TEXT DEFAULT ''");
 db.exec(`
 CREATE TABLE IF NOT EXISTS batch_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -110,6 +110,7 @@ async function requestPdf(stream, { request, items, approvals, baseUrl, supplier
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(`${it.product_code ? it.product_code + '. ' : ''}${it.product_name}`, { width: w, height: 24, ellipsis: true });
       doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text(`Variasi: ${it.variant_name || '-'}${it.volume ? ' · ' + it.volume : ''}`, { width: w, height: 20, ellipsis: true });
       if (it.notes) doc.fillColor(C.ink).text(`Catatan: ${it.notes}`, { width: w, height: 10, ellipsis: true });
+      if (it.vendor_note) doc.font('Helvetica-Bold').fillColor(C.ink).text(`Catatan desain: ${it.vendor_note}`, { width: w, height: 20, ellipsis: true });
     });
     cell(cols[3], (cx, cy, w) => doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(it.dimension || '-', cx, cy, { width: w }));
     cell(cols[4], (cx, cy, w) => doc.font('Helvetica-Bold').fontSize(10).text(Number(it.qty).toLocaleString('id-ID'), cx, cy, { width: w }).font('Helvetica').fontSize(7).fillColor(C.muted).text('pcs', { width: w }));
@@ -122,13 +123,13 @@ async function requestPdf(stream, { request, items, approvals, baseUrl, supplier
     });
     cell(cols[7], (cx, cy, w) => {
       doc.font('Helvetica').fontSize(7.5);
-      if (it.generated_uuid) {
-        const url = `${baseUrl}/files/${it.generated_uuid}/${encodeURIComponent(it.generated_name)}`;
-        doc.fillColor(C.accent).font('Helvetica-Bold').text('File siap cetak (batch baru)', cx, cy, { width: w, link: url, underline: true });
+      if (it.final_link || it.generated_uuid) {
+        const url = it.final_link || `${baseUrl}/files/${it.generated_uuid}`;
+        doc.fillColor(C.accent).font('Helvetica-Bold').text(it.final_link ? 'File siap cetak (link dari desainer)' : 'File siap cetak (batch baru)', cx, cy, { width: w, link: url, underline: true });
         doc.font('Helvetica').fontSize(6.5).fillColor(C.muted).text(url, { width: w, link: url, height: 18, ellipsis: true });
       }
       if (it.drive_link) {
-        doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.link).text('File mentah (Google Drive)', it.generated_uuid ? cx : cx, it.generated_uuid ? doc.y + 2 : cy, { width: w, link: it.drive_link, underline: true });
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.link).text('File mentah (Google Drive)', cx, (it.final_link || it.generated_uuid) ? doc.y + 2 : cy, { width: w, link: it.drive_link, underline: true });
         doc.font('Helvetica').fontSize(6.5).fillColor(C.muted).text(it.drive_link, { width: w, link: it.drive_link, height: 18, ellipsis: true });
       }
     });

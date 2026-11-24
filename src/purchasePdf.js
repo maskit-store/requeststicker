@@ -68,7 +68,7 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   const bottomLimit = () => doc.page.height - doc.page.margins.bottom;
   const items = pr.items;
   // Short, complete URL (nama file tetap terbawa saat diunduh) — mudah disalin vendor.
-  const fileUrl = it => it.generated_uuid ? `${baseUrl}/files/${it.generated_uuid}` : '';
+  const fileUrl = it => it.final_link || (it.generated_uuid ? `${baseUrl}/files/${it.generated_uuid}` : '');
 
   letterhead(doc, company);
 
@@ -192,6 +192,10 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
       // Vendor hanya menerima FILE JADI (sudah berisi nomor batch & expired) — tidak ada file mentah/master.
       if (it.batch_number || it.exp_code) {
         doc.font('Helvetica').fontSize(8).fillColor(C.muted).text(`BN ${it.batch_number || '-'}   ·   EXP ${it.exp_code || '-'}`, L + 14, doc.y, { width: W - 14 });
+      }
+      if (it.vendor_note) {
+        doc.font('Helvetica-Bold').fontSize(8.3).fillColor(C.ink).text('Catatan desain: ', L + 14, doc.y, { width: W - 14, continued: true })
+          .font('Helvetica').text(it.vendor_note);
       }
       const u = fileUrl(it);
       if (u) {

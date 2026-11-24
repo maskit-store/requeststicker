@@ -459,3 +459,16 @@ ul.dup a { color: inherit; }
   .pfull li::before { top: auto; bottom: 50%; right: auto; left: 13px; width: 3px; height: 100%; }
   .pf-t { padding-top: 4px; }
 }
+
+/* search autosuggest */
+.suggest { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 40; background: #fff; border: 1px solid var(--line, #d9e6e5); border-radius: 12px; box-shadow: 0 12px 32px rgba(11, 58, 65, .16); padding: 6px; max-height: 360px; overflow-y: auto; }
+.suggest button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 8px; cursor: pointer; font: inherit; color: inherit; }
+.suggest button:hover, .suggest button.on { background: var(--soft, #eef7f6); }
+.suggest .sg-t { display: grid; min-width: 0; }
+.suggest .sg-t b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest .sg-t small { color: var(--muted); font-size: 12px; }
+.suggest .thumb { width: 38px; height: 38px; flex: none; }
+.suggest mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
+.suggest .sg-dym { background: var(--yellow-soft); color: var(--yellow-ink); margin-bottom: 4px; }
+.suggest .sg-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+.vnote { margin-top: 4px; font-size: 13px; background: var(--yellow-soft); color: var(--yellow-ink); border-radius: 8px; padding: 5px 8px; }

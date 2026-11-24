@@ -107,3 +107,61 @@ test('desainer and manager can manage the catalog; regular user cannot', async (
   assert.strictEqual((await u('/api/products', body('Tidak boleh'))).status, 403);
   assert.strictEqual((await u('/api/sync', {})).status, 403);
 });
+
+test('search tolerates Indonesian spelling and typos (deterjen → Detergent)', async () => {
+  const u = await login('user');
+  const hits = async q => (await u('/api/products?limit=20&q=' + encodeURIComponent(q))).data.map(p => p.name.toLowerCase());
+  assert.ok((await hits('deterjen')).some(n => n.includes('detergent')));
+  assert.ok((await hits('sampo')).some(n => n.includes('shampoo')));
+  assert.ok((await hits('sunskrin')).some(n => n.includes('sunscreen')));
+  assert.strictEqual((await u('/api/products?q=M141')).data[0].code, 'M141');
+  const s = (await u('/api/products/suggest?q=deterjen')).data;
+  assert.strictEqual(s.did_you_mean, 'detergent');
+  assert.ok(s.items.length > 0 && s.items.length <= 8);
+});
+
+test('generator suggests shelf-life category; choice is remembered per product', async () => {
+  const d = await login('desainer');
+  const ids = async q => { const p = (await d('/api/products?q=' + q)).data[0]; return (await d('/api/products/' + p.id)).data.variants[0].id; };
+  const plan = async (v, extra = '') => (await d(`/api/variants/${v}/batch-plan?prod_date=2026-11-20${extra}`)).data;
+  const wonderShampoo = await plan(await ids('W067'));
+  assert.strictEqual(wonderShampoo.category, 'kosmetik_hewan');
+  assert.strictEqual(wonderShampoo.shelf_months, 36);
+  const syrup = await plan(await ids('T022'));
+  assert.strictEqual(syrup.category, 'md_cair');
+  assert.strictEqual(syrup.shelf_months, 24);
+  assert.strictEqual(syrup.exp, '12-2028');
+  const chosen = await plan(await ids('T022'), '&shelf_category=hewan_cair');
+  assert.strictEqual(chosen.shelf_months, 12);
+  assert.strictEqual(chosen.category_source, 'chosen');
+  assert.strictEqual(syrup.categories.length, 15);
+});
+
+test('design team edits item details, vendor note and final link without touching the catalog', async () => {
+  const u = await login('user');
+  const prod = (await u('/api/products?q=M141')).data[0];
+  const v = (await u('/api/products/' + prod.id)).data.variants[0];
+  const r = (await u('/api/requests', { request_date: '2026-11-24', items: [{ variant_id: v.id, qty: 100, supplier: 'PWD' }] })).data;
+  const it = r.items[0];
+  const d = await login('desainer');
+  assert.strictEqual((await u(`/api/request-items/${it.id}/design`, { vendor_note: 'x' }, 'PUT')).status, 403);
+  assert.strictEqual((await d(`/api/request-items/${it.id}/design`, { final_link: 'bukan-link' }, 'PUT')).status, 400);
+  const ok = await d(`/api/request-items/${it.id}/design`, { dimension: '9 x 7 cm', vendor_note: 'Bahan vinyl glossy, kiss-cut',
+    final_link: 'https://drive.google.com/file/d/1FinalFileAbcdefghij/view' }, 'PUT');
+  assert.strictEqual(ok.status, 200);
+  const m = await login('manager');
+  assert.strictEqual((await m(`/api/request-items/${it.id}/design`, { volume: '250 mL' }, 'PUT')).status, 200);
+  const after = (await d('/api/requests/' + r.id)).data.items[0];
+  assert.strictEqual(after.dimension, '9 x 7 cm');
+  assert.strictEqual(after.orig_dimension, v.dimension);
+  assert.strictEqual(after.vendor_note, 'Bahan vinyl glossy, kiss-cut');
+  assert.strictEqual(after.volume, '250 mL');
+  // catalog untouched
+  assert.strictEqual((await u('/api/products/' + prod.id)).data.variants[0].dimension, v.dimension);
+  // PR carries the note and the replacement link
+  for (const who of ['desainer', 'purchasing']) await (await login(who))(`/api/requests/${r.id}/approve`, { decision: 'approved', signature: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' });
+  const a = await login('admin', 'admin123');
+  const pr = (await a(`/api/requests/${r.id}/purchase-requests`, { supplier: 'PWD' })).data;
+  assert.strictEqual(pr.items[0].vendor_note, 'Bahan vinyl glossy, kiss-cut');
+  assert.strictEqual(pr.items[0].final_link, 'https://drive.google.com/file/d/1FinalFileAbcdefghij/view');
+});
