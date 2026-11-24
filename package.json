@@ -1,0 +1,22 @@
+{
+  "name": "requeststicker",
+  "version": "1.0.0",
+  "description": "Sistem request cetak sticker kemasan (admin & user) dengan katalog dari Google Drive, persetujuan 3 pihak, dan laporan PDF.",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "sync": "node scripts/sync-drive.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "express": "^4.21.2",
+    "pdf-lib": "^1.17.1",
+    "pdfkit": "^0.15.2"
+  }
+}
