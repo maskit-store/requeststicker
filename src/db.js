@@ -4,7 +4,13 @@ const crypto = require('crypto');
 
 process.removeAllListeners('warning');
 process.on('warning', w => { if (w.name !== 'ExperimentalWarning') console.warn(w); });
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch (e) {
+  throw new Error(`Modul database bawaan Node.js (node:sqlite) tidak tersedia di Node ${process.versions.node}. ` +
+    'Gunakan Node.js 22.13+ / 24, atau tambahkan NODE_OPTIONS=--experimental-sqlite untuk Node 22.5–22.12.');
+}
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });

@@ -1,3 +1,4 @@
+require('./src/env'); // .env file + Node.js version check — must run before anything reads process.env
 const express = require('express');
 const path = require('path');
 const fs = require('fs');

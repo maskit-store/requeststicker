@@ -83,6 +83,10 @@ cd /opt/requeststicker && git pull && docker build -t request-sticker . \
  -p 127.0.0.1:3000:3000 -v sticker-data:/data -e BASE_URL=https://sticker.sainsgo.com request-sticker
 ```
 
+## Opsi B2 — Hosting Niagahoster / cPanel dengan Node.js
+
+Lihat **[PANDUAN-NIAGAHOSTER.md](PANDUAN-NIAGAHOSTER.md)** (upload ZIP lewat File Manager, startup file `app.js`, pengaturan lewat `.env`).
+
 ## Opsi C — Komputer kantor + Cloudflare Tunnel (gratis)
 
 Cocok bila ada PC/mini-PC kantor yang **menyala 24 jam**. Jalankan dengan Docker (seperti Opsi B) atau Node.js 22 (`npm ci --omit=dev && npm start`),

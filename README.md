@@ -36,7 +36,7 @@ Butuh Node.js 22.5+.
 
 ```bash
 npm install
-npm start
+npm start   # menjalankan app.js; pengaturan bisa lewat file .env (lihat .env.example)
 ```
 
 Buka http://localhost:3000. Akun awal (segera ganti password di menu *Profil*):
@@ -51,7 +51,7 @@ Buka http://localhost:3000. Akun awal (segera ganti password di menu *Profil*):
 
 Variabel lingkungan opsional: `PORT`, `DATA_DIR` (database SQLite, thumbnail, file hasil generate), `BASE_URL` (URL publik untuk link di PDF), `ADMIN_PASSWORD`, `DEFAULT_PASSWORD`.
 
-Panduan deploy lengkap (Railway, VPS, komputer kantor) + checklist & backup: lihat **[DEPLOY.md](DEPLOY.md)**.
+Upload ke hosting Niagahoster (cPanel/hPanel Node.js): **[PANDUAN-NIAGAHOSTER.md](PANDUAN-NIAGAHOSTER.md)**. Panduan deploy lengkap (Railway, VPS, komputer kantor) + checklist & backup: lihat **[DEPLOY.md](DEPLOY.md)**.
 
 Docker:
 
