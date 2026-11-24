@@ -506,8 +506,58 @@ async function replaceBatchExp(bytes, values) {
   }
   stripPrivateData(doc);
   const pdf = Buffer.from(await doc.save({ useObjectStreams: false }));
+  const quality = await verifyPrintQuality(bytes, pdf);
   const verify = await detect(pdf);
-  return { pdf, replaced, verify };
+  return { pdf, replaced, verify, quality };
 }
 
-module.exports = { UPLOAD_FONT_DIR, detect, replaceBatchExp, classify, fontInfo, _scanStream: scanStream, _findMatches: findMatches };
+// ---------- print-quality guard ----------
+// The output must keep every image byte-for-byte (same pixels, resolution, colour space, compression)
+// and the same page geometry (Media/Crop/Bleed/Trim/Art boxes). Anything else is rejected.
+const crypto = require('crypto');
+function imagesAndBoxes(doc) {
+  const ctx = doc.context;
+  const images = [];
+  const seen = new Set();
+  const walkRes = res => {
+    if (!(res instanceof PDFDict)) return;
+    const xo = res.lookup(PDFName.of('XObject'));
+    if (!(xo instanceof PDFDict)) return;
+    for (const [, ref] of xo.entries()) {
+      const key = ref instanceof PDFRef ? ref.toString() : null;
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      const st = ctx.lookup(ref);
+      if (!(st instanceof PDFStream)) continue;
+      const sub = st.dict.lookup(PDFName.of('Subtype'));
+      if (sub && sub.asString() === '/Image') {
+        const raw = st instanceof PDFRawStream ? Buffer.from(st.contents) : Buffer.from(st.getContents());
+        const meta = ['Width', 'Height', 'BitsPerComponent', 'Filter', 'ColorSpace']
+          .map(k => { const v = st.dict.lookup(PDFName.of(k)); return v ? v.toString() : ''; }).join('|');
+        images.push(crypto.createHash('sha256').update(meta).update(raw).digest('hex'));
+      } else if (sub && sub.asString() === '/Form') {
+        walkRes(st.dict.lookup(PDFName.of('Resources')));
+      }
+    }
+  };
+  const boxes = doc.getPages().map(p => {
+    walkRes(p.node.Resources());
+    return ['MediaBox', 'CropBox', 'BleedBox', 'TrimBox', 'ArtBox']
+      .map(k => { const v = p.node.lookup(PDFName.of(k)); return v ? v.toString() : ''; }).join('|');
+  });
+  return { images: images.sort(), boxes };
+}
+async function verifyPrintQuality(srcBytes, outBytes) {
+  const a = imagesAndBoxes(await PDFDocument.load(srcBytes, { updateMetadata: false, ignoreEncryption: true }));
+  const b = imagesAndBoxes(await PDFDocument.load(outBytes, { updateMetadata: false, ignoreEncryption: true }));
+  const sameImages = a.images.length === b.images.length && a.images.every((h, i) => h === b.images[i]);
+  const sameBoxes = a.boxes.length === b.boxes.length && a.boxes.every((x, i) => x === b.boxes[i]);
+  if (!sameImages || !sameBoxes) {
+    const err = new Error('Pemeriksaan kualitas gagal: gambar atau ukuran halaman hasil berbeda dari file asli. File tidak dibuat.');
+    err.code = 'QUALITY';
+    throw err;
+  }
+  return { images: b.images.length, pages: b.boxes.length, identical: true };
+}
+
+module.exports = { UPLOAD_FONT_DIR, detect, replaceBatchExp, verifyPrintQuality, classify, fontInfo, _scanStream: scanStream, _findMatches: findMatches };

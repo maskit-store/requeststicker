@@ -75,7 +75,11 @@ Folder arsip vendor (`1. Vendor - …`) diabaikan. Snapshot awal ada di `seed/dr
 
 ## Catatan generator batch/exp
 
-- Teks dideteksi otomatis dari pola `BN.` / `BN:` / `No. Batch` dan `EXP.` / `Exp.` / `ED`. Admin cukup mengetik nilainya (tanpa awalan); awalan asli dipertahankan.
+- **Penomoran sesuai POB/KO/PD/001.01**: desainer cukup mengisi tanggal produksi + masa simpan (bulan). Nomor batch = `MMYY` + urutan produksi (2 digit, disarankan otomatis) + Kode SKU; expired = produksi + masa simpan + 1 bulan cadangan. Nomor batch yang sudah dipakai (di aplikasi atau tab Nomor Batch) diperingatkan.
+- Kode SKU dibaca dari Google Sheet *Numerik Sticker* (`seed/sku-map.json` sebagai salinan awal). Produk baru otomatis mendapat Kode Numerik & Kode SKU berikutnya dan ditulis ke sheet lewat Apps Script — lihat `PANDUAN-GOOGLE-SHEET.md`.
+- **Kualitas cetak dijaga**: setiap file hasil dibandingkan dengan file asli — seluruh gambar harus identik byte-per-byte (resolusi, kompresi, ruang warna) dan ukuran halaman (Media/Trim/Bleed box) sama; jika tidak, file ditolak.
+- Purchase Request ke vendor hanya memuat link **file jadi** (URL lengkap, tidak terpotong), tanpa file mentah/master Drive.
+- Teks dideteksi otomatis dari pola `BN.` / `BN:` / `No. Batch` dan `EXP.` / `Exp.` / `ED`; awalan asli dipertahankan.
 - Stroke yang di-expand Illustrator dibersihkan dan diterapkan ulang ke teks baru, jadi tidak ada "bayangan" angka lama. Data edit Illustrator (PieceInfo) yang masih berisi angka lama dibuang dari PDF hasil.
 - Uji pada 40 sticker acak: 31 berhasil, 0 rusak; sisanya tidak punya teks batch hidup (sudah di-outline / tidak ada batch) dan aplikasi menampilkan pesan jelas.
 - Lihat `fonts/README.md` untuk memakai Courier New asli.

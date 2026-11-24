@@ -67,7 +67,8 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   const L = doc.page.margins.left, W = doc.page.width - L - doc.page.margins.right;
   const bottomLimit = () => doc.page.height - doc.page.margins.bottom;
   const items = pr.items;
-  const fileUrl = it => it.generated_uuid ? `${baseUrl}/files/${it.generated_uuid}/${encodeURIComponent(it.generated_name || 'file.pdf')}` : '';
+  // Short, complete URL (nama file tetap terbawa saat diunduh) — mudah disalin vendor.
+  const fileUrl = it => it.generated_uuid ? `${baseUrl}/files/${it.generated_uuid}` : '';
 
   letterhead(doc, company);
 
@@ -188,21 +189,17 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
     items.forEach((it, i) => {
       if (doc.y + 26 > bottomLimit()) doc.addPage();
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(`${i + 1}. ${it.product_code ? it.product_code + ' - ' : ''}${it.product_name} (${it.dimension || '-'})`, L, doc.y, { width: W });
-      const linkLine = (label, url, strong) => {
-        const y = doc.y;
-        doc.font(strong ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.3).fillColor(C.link).text(label, L + 14, y, { width: 150, link: url, underline: true, lineBreak: false });
-        doc.font('Helvetica').fontSize(7.3).fillColor(C.muted);
-        let shown = url;
-        while (shown.length > 20 && doc.widthOfString(shown + '…') > W - 172) shown = shown.slice(0, -4);
-        const text = shown === url ? url : shown + '…';
-        doc.text(text, L + 168, y + 0.8, { width: doc.widthOfString(text) + 2, link: url, lineBreak: false });
-        doc.y = y + 11;
-      };
+      // Vendor hanya menerima FILE JADI (sudah berisi nomor batch & expired) — tidak ada file mentah/master.
+      if (it.batch_number || it.exp_code) {
+        doc.font('Helvetica').fontSize(8).fillColor(C.muted).text(`BN ${it.batch_number || '-'}   ·   EXP ${it.exp_code || '-'}`, L + 14, doc.y, { width: W - 14 });
+      }
       const u = fileUrl(it);
-      if (u) linkLine('File siap cetak (klik)', u, true);
-      if (it.drive_link) linkLine(it.is_manual ? 'Link file / referensi' : 'File master Google Drive', it.drive_link, false);
-      if (!u && !it.drive_link) {
-        doc.font('Helvetica-Oblique').fontSize(8.3).fillColor(C.muted).text('File cetak menyusul (desain baru, belum ada di database).', L + 14, doc.y, { width: W - 14 });
+      if (u) {
+        doc.font('Helvetica-Bold').fontSize(8.3).fillColor(C.ink).text('File siap cetak:', L + 14, doc.y, { width: W - 14 });
+        // URL ditulis utuh (dibungkus ke baris berikutnya bila panjang) agar mudah disalin.
+        doc.font('Courier').fontSize(8).fillColor(C.link).text(u, L + 14, doc.y, { width: W - 14, link: u, underline: true, lineBreak: true });
+      } else {
+        doc.font('Helvetica-Oblique').fontSize(8.3).fillColor(C.muted).text('File cetak menyusul — akan dikirim setelah desainer menyiapkan file jadi.', L + 14, doc.y, { width: W - 14 });
       }
       doc.moveDown(0.25);
     });
@@ -250,7 +247,7 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
     doc.addPage();
     letterhead(doc, company);
     doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(`LAMPIRAN — Visual Desain (${pr.number})`, L, doc.y, { width: W });
-    doc.font('Helvetica').fontSize(8.5).fillColor(C.muted).text('Gambar hanya sebagai acuan visual. Gunakan file cetak pada tautan di atas untuk produksi.', { width: W });
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.muted).text('Gambar hanya sebagai acuan visual. Gunakan file siap cetak pada tautan di halaman sebelumnya untuk produksi.', { width: W });
     doc.moveDown(0.6);
     const cw = (W - 14) / 2, ch = 206;
     let col = 0, rowY = doc.y;

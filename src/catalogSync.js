@@ -85,6 +85,7 @@ async function syncFromDrive(rootId = getSetting('drive_root_id', DEFAULT_ROOT))
       const stats = importCatalog(buildCatalog(tree));
       setSetting('last_sync', new Date().toISOString());
       setSetting('last_sync_stats', JSON.stringify(stats));
+      require('./sku').applySeedSkuMap();
       return stats;
     } finally { running = null; }
   })();

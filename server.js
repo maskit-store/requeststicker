@@ -11,6 +11,7 @@ const { requestPdf, recapPdf, APPROVER_ROLES, STATUS_LABEL } = require('./src/re
 const { detect, replaceBatchExp, fontInfo, UPLOAD_FONT_DIR: FONT_DIR } = require('./src/batchReplace');
 const { parseDimension, parseVolume, classifyPackaging, PACKAGING_TYPES } = require('./src/catalogParser');
 const { purchasePdf } = require('./src/purchasePdf');
+const sku = require('./src/sku');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 14;
@@ -49,6 +50,7 @@ if (db.prepare('SELECT COUNT(*) n FROM users').get().n === 0) {
 }
 const seeded = seedIfEmpty();
 if (seeded) console.log('Katalog awal dimuat dari seed:', seeded);
+{ const n = sku.applySeedSkuMap(); if (n) console.log(`Kode SKU dari Google Sheet diterapkan ke ${n} produk.`); }
 // One-time: classify packaging type for catalogs imported before this feature existed.
 if (!getSetting('pkg_classified')) {
   tx(() => {
@@ -233,6 +235,13 @@ app.get('/api/products', auth(), (req, res) => {
   res.json(rows.map(productRow));
 });
 
+// Codes a new product would get (shown in the form before saving).
+app.get('/api/products/next-codes', auth('admin'), wrap(async (req, res) => {
+  const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(Number(req.query.brand_id));
+  const code = brand ? await sku.nextProductCode(brand.id, brand.name, str(req.query.prefix, 3)) : null;
+  res.json({ code, sku_code: await sku.nextSkuCode(), needs_prefix: !!brand && !code });
+}));
+
 app.get('/api/products/:id', auth(), (req, res) => {
   const p = db.prepare(`SELECT p.*, b.name AS brand_name FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.id = ?`).get(req.params.id);
   if (!p) throw new HttpError(404, 'Produk tidak ditemukan.');
@@ -273,22 +282,36 @@ function variantInput(body) {
   };
 }
 
-app.post('/api/products', auth('admin'), (req, res) => {
-  const brandId = Number(req.body.brand_id);
-  if (!db.prepare('SELECT 1 FROM brands WHERE id = ?').get(brandId)) throw bad('Pilih brand.');
+app.post('/api/products', auth('admin'), wrap(async (req, res) => {
+  const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(Number(req.body.brand_id));
+  if (!brand) throw bad('Pilih brand.');
   const name = str(req.body.name, 300);
   if (!name) throw bad('Nama produk wajib diisi.');
   const variants = Array.isArray(req.body.variants) ? req.body.variants : [];
   if (!variants.length) throw bad('Tambahkan minimal 1 file sticker (variasi) beserta link Google Drive-nya.');
+  // Kode Numerik (mis. M243) & Kode SKU (mis. E73) dibuat otomatis bila tidak diisi.
+  let code = str(req.body.code, 20).toUpperCase();
+  if (!code) code = await sku.nextProductCode(brand.id, brand.name, str(req.body.prefix, 3));
+  if (!code) throw bad(`Brand ${brand.name} belum punya pola kode. Isi awalan kode (mis. "X" untuk X001).`);
+  if (db.prepare('SELECT 1 FROM products WHERE code = ? AND active = 1').get(code)) throw bad(`Kode ${code} sudah dipakai produk lain.`);
+  let skuCode = str(req.body.sku_code, 3).toUpperCase();
+  if (skuCode && !sku.SKU_RE.test(skuCode)) throw bad('Kode SKU harus 1 huruf + 2 angka, mis. E73.');
+  const newSku = !skuCode;
+  if (!skuCode) skuCode = await sku.nextSkuCode();
+  const volume = str(req.body.volume, 50);
   const id = tx(() => {
-    const r = db.prepare(`INSERT INTO products(brand_id, code, name, description, volume, drive_link, source) VALUES(?,?,?,?,?,?,'manual')`)
-      .run(brandId, str(req.body.code, 20).toUpperCase(), name, str(req.body.description, 2000), str(req.body.volume, 50), str(req.body.drive_link, 1000));
+    const r = db.prepare(`INSERT INTO products(brand_id, code, name, description, volume, drive_link, source, sku_code) VALUES(?,?,?,?,?,?,'manual',?)`)
+      .run(brand.id, code, name, str(req.body.description, 2000), volume, str(req.body.drive_link, 1000), skuCode);
     const pid = Number(r.lastInsertRowid);
     for (const v of variants) insertVariant(pid, v);
     return pid;
   });
-  res.json({ id });
-});
+  const dim = db.prepare("SELECT dimension FROM variants WHERE product_id = ? AND dimension <> '' LIMIT 1").get(id)?.dimension || '';
+  const pkg = db.prepare('SELECT package_type FROM variants WHERE product_id = ? LIMIT 1').get(id)?.package_type || '';
+  sku.queueSheet('appendProduct', { tab: sku.BRAND_TAB[brand.name] || '', brand: brand.name, kode_numerik: code, name, size: dim, volume, package_type: pkg });
+  if (newSku) sku.queueSheet('appendSku', { name, size: dim, volume, sku: skuCode, kode_numerik: code, brand: brand.name });
+  res.json({ id, code, sku_code: skuCode, sheet: sku.sheetWebhook().url ? 'queued' : 'not_configured' });
+}));
 
 function insertVariant(pid, body) {
   const v = variantInput(body);
@@ -309,6 +332,10 @@ app.put('/api/products/:id', auth('admin'), (req, res) => {
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!p) throw new HttpError(404, 'Produk tidak ditemukan.');
   const b = req.body;
+  const skuCode = b.sku_code !== undefined ? str(b.sku_code, 3).toUpperCase() : p.sku_code;
+  if (skuCode && !sku.SKU_RE.test(skuCode)) throw bad('Kode SKU harus 1 huruf + 2 angka, mis. A01.');
+  const shelf = b.shelf_months !== undefined ? Math.max(0, Math.min(120, parseInt(b.shelf_months, 10) || 0)) : p.shelf_months;
+  db.prepare('UPDATE products SET sku_code = ?, shelf_months = ? WHERE id = ?').run(skuCode || '', shelf || 0, p.id);
   db.prepare(`UPDATE products SET brand_id=?, code=?, name=?, description=?, volume=?, drive_link=?, active=?, updated_at=datetime('now') WHERE id=?`).run(
     b.brand_id ? Number(b.brand_id) : p.brand_id, b.code !== undefined ? str(b.code, 20).toUpperCase() : p.code,
     str(b.name ?? p.name, 300) || p.name, b.description !== undefined ? str(b.description, 2000) : p.description,
@@ -412,29 +439,87 @@ app.post('/api/variants/:id/detect', auth('admin', 'desainer', 'manager_desain')
   res.json({ found, file_name: v.file_name });
 }));
 
-app.post('/api/variants/:id/generate', auth('admin'), wrap(async (req, res) => {
+// Batch plan per POB: production date + shelf life → batch (MMYY + seq + SKU) & expiry (+1 month reserve).
+app.get('/api/variants/:id/batch-plan', auth('admin', 'desainer'), wrap(async (req, res) => {
   const v = variantForGen(req.params.id);
-  const batch = str(req.body.batch, 40), exp = str(req.body.exp, 40);
-  if (!batch && !exp) throw bad('Isi nomor batch dan/atau kode expired.');
-  if (/[^\x20-\x7e]/.test(batch + exp)) throw bad('Gunakan huruf/angka standar saja.');
+  const p = db.prepare('SELECT id, sku_code, shelf_months FROM products WHERE id = ?').get(v.product_id);
+  const prodDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.prod_date || '') ? req.query.prod_date : today();
+  const itemId = Number(req.query.request_item_id) || 0;
+  const requestId = itemId ? db.prepare('SELECT request_id FROM request_items WHERE id = ?').get(itemId)?.request_id : 0;
+  const shelf = parseInt(req.query.shelf_months, 10) || p.shelf_months || 36;
+  const seq = parseInt(req.query.seq, 10) || 0;
+  const sugg = await sku.nextSeq(prodDate.slice(0, 7), requestId);
+  const useSeq = seq || sugg.seq;
+  const code = (str(req.query.sku_code, 3).toUpperCase() || p.sku_code || '');
+  let batch = '', exp = '', error = '';
+  try { exp = sku.buildExp(prodDate, shelf); batch = sku.buildBatch({ prodDate, seq: useSeq, sku: code }); }
+  catch (e) { error = e.message; }
+  const usedIn = batch ? await sku.batchExists(batch) : null;
+  const mine = batch && itemId ? db.prepare('SELECT 1 FROM batch_records WHERE batch = ? AND request_item_id = ?').get(batch, itemId) : null;
+  res.json({ sku_code: code, sku_missing: !p.sku_code, shelf_months: shelf, prod_date: prodDate, seq: useSeq, seq_suggestion: sugg,
+    batch, exp, error, duplicate: usedIn && !mine ? usedIn : null });
+}));
+
+app.post('/api/variants/:id/generate', auth('admin', 'desainer'), wrap(async (req, res) => {
+  const v = variantForGen(req.params.id);
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(v.product_id);
+  const itemId = Number(req.body.request_item_id) || 0;
+  const item = itemId ? db.prepare('SELECT * FROM request_items WHERE id = ?').get(itemId) : null;
+  let batch, exp, record = null;
+  if (req.body.mode === 'manual') {
+    if (req.user.role !== 'admin') throw new HttpError(403, 'Isi manual hanya untuk admin.');
+    batch = str(req.body.batch, 40); exp = str(req.body.exp, 40);
+    if (!batch && !exp) throw bad('Isi nomor batch dan/atau kode expired.');
+    if (/[^\x20-\x7e]/.test(batch + exp)) throw bad('Gunakan huruf/angka standar saja.');
+  } else {
+    const prodDate = /^\d{4}-\d{2}-\d{2}$/.test(req.body.prod_date || '') ? req.body.prod_date : '';
+    if (!prodDate) throw bad('Isi tanggal produksi.');
+    const shelf = parseInt(req.body.shelf_months, 10);
+    const code = str(req.body.sku_code, 3).toUpperCase() || product.sku_code;
+    if (!code) throw bad('Produk ini belum punya Kode SKU. Isi Kode SKU (mis. E73) terlebih dahulu.');
+    try { exp = sku.buildExp(prodDate, shelf); batch = sku.buildBatch({ prodDate, seq: req.body.seq, sku: code }); }
+    catch (e) { throw bad(e.message); }
+    const usedIn = await sku.batchExists(batch);
+    const mine = itemId && db.prepare('SELECT 1 FROM batch_records WHERE batch = ? AND request_item_id = ?').get(batch, itemId);
+    if (usedIn && !mine && !req.body.allow_duplicate) {
+      throw bad(`Nomor batch ${batch} sudah pernah dipakai (tercatat di ${usedIn}). Ganti urutan produksi atau tanggal produksi.`);
+    }
+    record = { batch, exp, sku_code: code, prod_month: prodDate.slice(0, 7), seq: parseInt(req.body.seq, 10), prod_date: prodDate, shelf_months: shelf };
+  }
   const src = await fetchSourcePdf(v.drive_file_id, { fresh: true });
   let result;
   try { result = await replaceBatchExp(src, { batch, exp }); }
-  catch (e) { if (e.code === 'NOT_FOUND') throw bad(e.message); throw e; }
+  catch (e) { if (e.code === 'NOT_FOUND' || e.code === 'QUALITY') throw bad(e.message); throw e; }
   const uuid = crypto.randomUUID();
   const base = (v.file_name || v.name).replace(/\.pdf$/i, '').replace(/^(Salinan|Copy of)\s+/i, '');
   const fileName = `${base} - BN ${batch || '-'} EXP ${exp || '-'}.pdf`.replace(/[\\/:*?"<>|]/g, '_').slice(0, 200);
   fs.writeFileSync(path.join(GEN_DIR, uuid + '.pdf'), result.pdf);
-  const gid = Number(db.prepare(`INSERT INTO generated_files(uuid, variant_id, source_file_id, file_name, batch_number, exp_code, replaced, size, created_by, created_by_name)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(uuid, v.id, v.drive_file_id, fileName, batch, exp, JSON.stringify(result.replaced), result.pdf.length, req.user.id, req.user.name).lastInsertRowid);
-  const itemId = Number(req.body.request_item_id);
-  if (itemId) {
-    db.prepare('UPDATE request_items SET batch_number=?, exp_code=?, generated_id=? WHERE id=?').run(batch, exp, gid, itemId);
-    const reqId = db.prepare('SELECT request_id FROM request_items WHERE id=?').get(itemId)?.request_id;
-    if (reqId) db.prepare(`UPDATE requests SET updated_at=datetime('now') WHERE id=?`).run(reqId);
+  const gid = tx(() => {
+    const id = Number(db.prepare(`INSERT INTO generated_files(uuid, variant_id, source_file_id, file_name, batch_number, exp_code, replaced, size, created_by, created_by_name)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(uuid, v.id, v.drive_file_id, fileName, batch, exp, JSON.stringify(result.replaced), result.pdf.length, req.user.id, req.user.name).lastInsertRowid);
+    if (item) {
+      db.prepare('UPDATE request_items SET batch_number=?, exp_code=?, generated_id=? WHERE id=?').run(batch, exp, id, item.id);
+      db.prepare(`UPDATE requests SET updated_at=datetime('now') WHERE id=?`).run(item.request_id);
+    }
+    if (record) {
+      if (item) db.prepare('DELETE FROM batch_records WHERE request_item_id = ?').run(item.id); // regenerate replaces the earlier number
+      db.prepare(`INSERT INTO batch_records(batch, exp, sku_code, prod_month, seq, prod_date, shelf_months, product_id, variant_id, request_id, request_item_id, generated_id, created_by_name)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(record.batch, record.exp, record.sku_code, record.prod_month, record.seq, record.prod_date, record.shelf_months,
+        product.id, v.id, item?.request_id || null, item?.id || null, id, req.user.name);
+      db.prepare('UPDATE products SET shelf_months = ?, sku_code = CASE WHEN sku_code = \'\' OR sku_code IS NULL THEN ? ELSE sku_code END WHERE id = ?')
+        .run(record.shelf_months, record.sku_code, product.id);
+    }
+    return id;
+  });
+  if (record) {
+    // POB 4.3: every issued batch number is recorded in the batch register (sheet "Nomor Batch")
+    sku.queueSheet('appendBatch', {
+      brand: v.brand, product: `${v.product_code ? v.product_code + ' - ' : ''}${v.product_name}`, volume: v.volume || product.volume || '',
+      batch, exp, qty: item ? `${item.qty}pcs` : '', supplier: item ? item.supplier : '', created_by: req.user.name,
+    });
   }
-  const url = `${baseUrl(req)}/files/${uuid}/${encodeURIComponent(fileName)}`;
-  res.json({ id: gid, uuid, file_name: fileName, url, replaced: result.replaced, verify: result.verify, size: result.pdf.length });
+  const url = `${baseUrl(req)}/files/${uuid}`;
+  res.json({ id: gid, uuid, file_name: fileName, url, replaced: result.replaced, verify: result.verify, quality: result.quality, size: result.pdf.length, batch, exp });
 }));
 
 app.get('/api/generated', auth(), (req, res) => {
@@ -762,6 +847,32 @@ app.put('/api/settings/company', auth('admin'), (req, res) => {
   res.json(companySettings());
 });
 app.get('/api/vendors', auth('admin', 'purchasing'), (req, res) => res.json(db.prepare('SELECT * FROM vendors ORDER BY name').all()));
+
+// ---------- Google Sheet connection (Apps Script web app) ----------
+app.get('/api/settings/sheet', auth('admin'), (req, res) => {
+  const w = sku.sheetWebhook();
+  res.json({
+    url: w.url, has_token: !!w.token, sheet_id: sku.SHEET_ID,
+    outbox: db.prepare('SELECT id, action, payload, status, error, created_at, sent_at FROM sheet_outbox ORDER BY id DESC LIMIT 50').all()
+      .map(o => ({ ...o, payload: JSON.parse(o.payload) })),
+    pending: db.prepare("SELECT COUNT(*) n FROM sheet_outbox WHERE status <> 'sent'").get().n,
+  });
+});
+app.put('/api/settings/sheet', auth('admin'), (req, res) => {
+  const url = str(req.body.url, 500);
+  if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) throw bad('URL harus berupa URL Web App Apps Script (https://script.google.com/macros/s/…/exec).');
+  setSetting('sheet_webhook_url', url);
+  if (req.body.token !== undefined) setSetting('sheet_webhook_token', str(req.body.token, 200));
+  res.json({ ok: true });
+});
+app.post('/api/settings/sheet/test', auth('admin'), wrap(async (req, res) => {
+  try { res.json({ ok: true, result: await sku.callWebhook('ping', {}) }); }
+  catch (e) { throw bad(e.message); }
+}));
+app.post('/api/settings/sheet/flush', auth('admin'), wrap(async (req, res) => {
+  await sku.flushOutbox();
+  res.json({ pending: db.prepare("SELECT COUNT(*) n FROM sheet_outbox WHERE status <> 'sent'").get().n });
+}));
 
 // ---------- purchase requests (to vendor) ----------
 const supplierToVendor = s => String(s || '').replace(/^Lainnya:\s*/, '');

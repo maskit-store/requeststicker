@@ -162,7 +162,7 @@ const ROUTES = {
   'request': { title: 'Semua Request', view: viewRequests },
   'riwayat': { title: 'Riwayat Pemesanan', view: viewHistory },
   'persetujuan': { title: 'Persetujuan', view: viewApprovals, roles: APPROVERS },
-  'generator': { title: 'Generator Batch & Exp', view: viewGenerator, roles: ['admin'] },
+  'generator': { title: 'Generator Batch & Exp', view: viewGenerator, roles: ['admin', 'desainer'] },
   'katalog': { title: 'Katalog Sticker', view: viewCatalog },
   'laporan': { title: 'Laporan PDF', view: viewReports, roles: ['admin', ...APPROVERS] },
   'pengguna': { title: 'Pengguna', view: viewUsers, roles: ['admin'] },
@@ -218,7 +218,7 @@ function renderShell(app) {
   const links = [
     ['', 'Beranda'], ['baru', 'Buat Request'], ['request', 'Semua Request'], ['riwayat', 'Riwayat Pemesanan'],
     ...(APPROVERS.includes(u.role) ? [['persetujuan', 'Persetujuan <span class="count hidden" id="cnt-ap"></span>']] : []),
-    ...(u.role === 'admin' ? [['generator', 'Generator Batch & Exp']] : []),
+    ...(['admin', 'desainer'].includes(u.role) ? [['generator', 'Generator Batch & Exp']] : []),
     ['katalog', u.role === 'admin' ? 'Kelola Katalog' : 'Katalog Sticker'],
     ...(u.role === 'admin' || APPROVERS.includes(u.role) ? [['laporan', 'Laporan PDF']] : []),
     ...(u.role === 'admin' ? [['pengguna', 'Pengguna']] : []),
@@ -757,6 +757,7 @@ async function openRequest(id) {
 function renderRequestModal(m, r, reload) {
   const u = state.user;
   const isAdmin = u.role === 'admin';
+  const canGen = isAdmin || u.role === 'desainer';
   const mine = r.approvals.find(a => a.role === u.role);
   const canSign = APPROVERS.includes(u.role) && (r.status === 'pending' || r.status === 'rejected');
   const suppliers = [...new Set(r.items.map(i => i.supplier))].filter(sp => sp !== UNDECIDED);
@@ -774,7 +775,7 @@ function renderRequestModal(m, r, reload) {
       ${r.notes ? `<dt>Catatan</dt><dd style="font-weight:400">${esc(r.notes)}</dd>` : ''}
       ${r.status_note ? `<dt>Catatan status</dt><dd style="font-weight:400">${esc(r.status_note)}</dd>` : ''}
     </dl>
-    <div class="card"><div class="table-wrap"><table class="t cards-sm items-t"><thead><tr><th></th><th>Sticker</th><th>Ukuran</th><th>Jumlah</th><th>Supplier</th><th>Batch / Exp</th>${isAdmin && editable ? '<th></th>' : ''}</tr></thead><tbody>
+    <div class="card"><div class="table-wrap"><table class="t cards-sm items-t"><thead><tr><th></th><th>Sticker</th><th>Ukuran</th><th>Jumlah</th><th>Supplier</th><th>Batch / Exp</th>${canGen && editable ? '<th></th>' : ''}</tr></thead><tbody>
     ${r.items.map(it => `<tr>
       <td class="cell-thumb">${it.drive_file_id ? `<span class="thumb lg" ${bgThumb(it.drive_file_id, 300)} data-zoom="${esc(it.drive_file_id)}" data-caption="${esc(it.variant_name)}"></span>` : '<span class="thumb lg thumb-manual">✍️</span>'}</td>
       <td class="cell-main"><div class="small muted">${esc(it.brand)} ${pkgBadge(it.package_type)} ${it.is_manual ? '<span class="tag manual">Input manual</span>' : ''}</div><b>${esc(it.product_code ? it.product_code + '. ' : '')}${esc(it.product_name)}</b><div class="small">${esc(it.variant_name)}${it.volume ? ' · ' + esc(it.volume) : ''}</div>
@@ -784,8 +785,8 @@ function renderRequestModal(m, r, reload) {
       <td data-label="Ukuran">${it.dimension ? `<span class="dim">${esc(it.dimension)}</span>` : '-'}</td>
       <td data-label="Jumlah"><b>${fmtNum(it.qty)}</b> pcs</td><td data-label="Supplier"><div>${supHtml(it.supplier)}</div>${canPR && editable ? `<button class="btn sm ${it.supplier === UNDECIDED ? 'accent' : 'ghost'}" data-sup="${it.id}" style="margin-top:4px">${it.supplier === UNDECIDED ? 'Pilih supplier' : 'Ubah'}</button>` : ''}</td>
       <td data-label="Batch / Exp" class="mono small" style="white-space:nowrap">${it.batch_number || it.exp_code ? `BN ${esc(it.batch_number || '-')}<br>EXP ${esc(it.exp_code || '-')}` : '<span class="muted" style="font-family:inherit">Belum diisi</span>'}</td>
-      ${isAdmin && editable ? `<td>${it.variant_id ? `<button class="btn sm primary" data-gen="${it.id}">${it.generated_uuid ? 'Ubah' : 'Isi'} Batch/Exp</button>`
-        : `<button class="btn sm" data-bn="${it.id}">Catat Batch/Exp</button>`}</td>` : ''}
+      ${canGen && editable ? `<td>${it.variant_id ? `<button class="btn sm primary" data-gen="${it.id}">${it.generated_uuid ? 'Ubah' : 'Isi'} Batch/Exp</button>`
+        : isAdmin ? `<button class="btn sm" data-bn="${it.id}">Catat Batch/Exp</button>` : ''}</td>` : ''}
     </tr>`).join('')}</tbody></table></div></div>
     <div><h3 style="margin-bottom:8px">Persetujuan & tanda tangan</h3>
       <div class="approvals">${APPROVERS.map(role => {
@@ -810,7 +811,7 @@ function renderRequestModal(m, r, reload) {
         : '<div class="small muted">Belum ada Purchase Request.</div>'}
     </div>` : ''}
     ${r.items.some(i => i.is_manual) ? '<div class="callout warn">Ada item <b>input manual</b> (produk/brand belum ada di database). Siapkan file cetaknya dan tambahkan produknya ke katalog bila perlu.</div>' : ''}
-    ${r.status === 'pending' && isAdmin && r.items.some(i => !i.generated_uuid && i.variant_id) ? '<div class="callout warn">Isi nomor batch & kode expired untuk setiap sticker agar file siap cetak otomatis dibuat dan ikut tercantum di ringkasan PDF.</div>' : ''}`;
+    ${r.status === 'pending' && canGen && r.items.some(i => !i.generated_uuid && i.variant_id) ? '<div class="callout warn">Isi nomor batch & kode expired untuk setiap sticker agar file siap cetak otomatis dibuat dan ikut tercantum di ringkasan PDF.</div>' : ''}`;
   const foot = [];
   foot.push(`<a class="btn" href="/api/requests/${r.id}/pdf" target="_blank" rel="noopener">${ICON.pdf} Ringkasan PDF</a>`);
   if (suppliers.length > 1) foot.push(`<select class="input" id="pdf-sup" style="width:auto"><option value="">PDF per supplier…</option>${suppliers.map(s => `<option>${esc(s)}</option>`).join('')}</select>`);
@@ -828,7 +829,7 @@ function renderRequestModal(m, r, reload) {
   $$('[data-gen]', m.el).forEach(b => b.onclick = () => {
     const it = r.items.find(x => x.id === +b.dataset.gen);
     if (!it.variant_id) return toast('Sticker asli sudah tidak ada di katalog.', true);
-    openGenerator({ variantId: it.variant_id, title: `${it.product_code ? it.product_code + '. ' : ''}${it.product_name} — ${it.variant_name}`, itemId: it.id, batch: it.batch_number, exp: it.exp_code, onDone: reload });
+    openGenerator({ variantId: it.variant_id, title: `${it.product_code ? it.product_code + '. ' : ''}${it.product_name} — ${it.variant_name}`, itemId: it.id, onDone: reload });
   });
   $('#sign', m.el)?.addEventListener('click', () => openSign(r, reload));
   $$('[data-bn]', m.el).forEach(b => b.onclick = () => {
@@ -906,15 +907,33 @@ function openReject(r, reload) {
   });
 }
 
-// ---------------- batch / exp generator ----------------
-function openGenerator({ variantId, title, itemId, batch = '', exp = '', onDone }) {
+// ---------------- batch / exp generator (POB/KO/PD/001.01) ----------------
+function addMonthsLabel(prodDate, months) {
+  const m = /^(\d{4})-(\d{2})/.exec(prodDate || ''); const n = parseInt(months, 10);
+  if (!m || !(n > 0)) return '';
+  const t = +m[1] * 12 + (+m[2] - 1) + n + 1;
+  return `${String(t % 12 + 1).padStart(2, '0')}-${Math.floor(t / 12)}`;
+}
+function openGenerator({ variantId, title, itemId, onDone }) {
+  const isAdmin = state.user.role === 'admin';
+  const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const m = modal('Nomor Batch & Kode Expired', `
     <div><div class="muted small">Sticker</div><b>${esc(title)}</b></div>
     <div class="callout" id="g-detect"><span class="spin"></span> Membaca nomor batch & expired yang ada di file sticker…</div>
+    <div class="callout small">Sesuai POB <b>Sistem Penomoran Batch</b>: cukup isi <b>tanggal produksi</b> dan <b>masa simpan (bulan)</b>.
+      Nomor batch = <span class="mono">bulan·tahun·urutan produksi·kode SKU</span>; expired = tanggal produksi + masa simpan + 1 bulan cadangan.</div>
     <div class="grid2">
-      <label class="f">Nomor batch baru <span class="hint">tanpa awalan “BN.”</span><input class="input mono" id="g-batch" value="${esc(batch)}" placeholder="mis. 112611A07" autocomplete="off"></label>
-      <label class="f">Kode expired baru <span class="hint">tanpa awalan “EXP.”</span><input class="input mono" id="g-exp" value="${esc(exp)}" placeholder="mis. 11-2029" autocomplete="off"></label>
+      <label class="f">Tanggal produksi<input class="input" type="date" id="g-date" value="${todayStr}"></label>
+      <label class="f">Masa simpan <span class="hint">bulan</span><input class="input" type="number" min="1" max="120" id="g-shelf" placeholder="36"></label>
+      <label class="f">Urutan produksi di bulan ini <span class="hint" id="g-seqhint">otomatis</span><input class="input" type="number" min="1" max="99" id="g-seq"></label>
+      <label class="f">Kode SKU produk <span class="hint" id="g-skuhint">dari Google Sheet</span><input class="input mono" id="g-sku" maxlength="3" placeholder="mis. A01" autocomplete="off"></label>
     </div>
+    <div class="plan" id="g-plan"><span class="spin"></span></div>
+    ${isAdmin ? `<details class="small"><summary>Isi manual (khusus admin, di luar aturan POB)</summary>
+      <div class="grid2" style="margin-top:8px">
+        <label class="f">Nomor batch<input class="input mono" id="g-mbatch" autocomplete="off"></label>
+        <label class="f">Kode expired<input class="input mono" id="g-mexp" autocomplete="off"></label></div>
+      <button class="btn sm" type="button" id="g-mgo">Generate dengan isian manual</button></details>` : ''}
     <div id="g-result"></div>`,
   { wide: true, foot: '<button class="btn" data-close>Tutup</button><button class="btn primary" id="g-go">Generate File Siap Cetak</button>' });
   api(`/api/variants/${variantId}/detect`, { method: 'POST', body: {} }).then(d => {
@@ -922,35 +941,82 @@ function openGenerator({ variantId, title, itemId, batch = '', exp = '', onDone 
     if (!d.found.length) { el.className = 'callout warn'; el.innerHTML = 'Teks batch / expired tidak terdeteksi di file ini (kemungkinan sudah di-outline atau sticker ini tidak memiliki nomor batch). Generate tetap bisa dicoba.'; return; }
     el.className = 'found';
     el.innerHTML = `<div class="muted small">Terdeteksi di file (akan diganti):</div>` + d.found.map(f => `<div class="ln"><span class="k">${f.kind === 'batch' ? 'BATCH' : 'EXPIRED'}</span>${esc(f.text)}<span class="k" style="margin-left:auto">${esc((f.font || '').replace(/^[A-Z]{6}\+/, ''))}</span></div>`).join('');
-    const firstB = d.found.find(f => f.kind === 'batch'), firstE = d.found.find(f => f.kind === 'exp');
-    if (firstB && !$('#g-batch', m.el).value) $('#g-batch', m.el).placeholder = 'sebelumnya: ' + firstB.value;
-    if (firstE && !$('#g-exp', m.el).value) $('#g-exp', m.el).placeholder = 'sebelumnya: ' + firstE.value;
   }).catch(e => { const el = $('#g-detect', m.el); el.className = 'callout err'; el.textContent = e.message; });
-  $('#g-go', m.el).onclick = e => busy(e.target, async () => {
-    const r = await api(`/api/variants/${variantId}/generate`, { method: 'POST', body: { batch: $('#g-batch', m.el).value, exp: $('#g-exp', m.el).value, request_item_id: itemId } });
+
+  let plan = null, seqTouched = false, timer = 0, reqNo = 0;
+  const q = () => {
+    const p = new URLSearchParams({ prod_date: $('#g-date', m.el).value, shelf_months: $('#g-shelf', m.el).value, sku_code: $('#g-sku', m.el).value.trim() });
+    if (seqTouched && $('#g-seq', m.el).value) p.set('seq', $('#g-seq', m.el).value);
+    if (itemId) p.set('request_item_id', itemId);
+    return p;
+  };
+  async function refresh() {
+    const my = ++reqNo;
+    const el = $('#g-plan', m.el);
+    try {
+      const p = await api(`/api/variants/${variantId}/batch-plan?` + q());
+      if (my !== reqNo) return;
+      plan = p;
+      if (!$('#g-shelf', m.el).value) $('#g-shelf', m.el).value = p.shelf_months;
+      if (!seqTouched) $('#g-seq', m.el).value = p.seq;
+      $('#g-seqhint', m.el).textContent = p.seq_suggestion ? `saran: ${p.seq_suggestion.seq} — ${p.seq_suggestion.reason}` : '';
+      if (!$('#g-sku', m.el).value && p.sku_code) $('#g-sku', m.el).value = p.sku_code;
+      $('#g-skuhint', m.el).innerHTML = p.sku_missing ? '<span style="color:var(--danger)">belum ada — isi kode SKU</span>' : 'dari Google Sheet';
+      el.innerHTML = p.error ? `<div class="callout err">${esc(p.error)}</div>` : `
+        <div class="plan-box"><div><div class="muted small">Nomor batch</div><div class="big mono">BN. ${esc(p.batch)}</div></div>
+          <div><div class="muted small">Expired</div><div class="big mono">EXP. ${esc(p.exp)}</div></div></div>
+        <div class="small muted">${esc(p.batch.slice(0, 2))} = bulan produksi · ${esc(p.batch.slice(2, 4))} = tahun · ${esc(p.batch.slice(4, 6))} = produksi ke-${+p.batch.slice(4, 6)} bulan ini · ${esc(p.batch.slice(6))} = kode SKU.
+          Expired = ${esc(p.prod_date.slice(5, 7))}-${esc(p.prod_date.slice(0, 4))} + ${p.shelf_months} bulan + 1 bulan cadangan.</div>
+        ${p.duplicate ? `<div class="callout warn">Nomor batch ini <b>sudah pernah dipakai</b> (tercatat di ${esc(p.duplicate)}). Ganti urutan produksi bila ini produksi yang berbeda.</div>` : ''}`;
+    } catch (e) { if (my === reqNo) el.innerHTML = `<div class="callout err">${esc(e.message)}</div>`; }
+  }
+  const later = () => { clearTimeout(timer); timer = setTimeout(refresh, 250); };
+  $('#g-date', m.el).oninput = () => { seqTouched = false; later(); };
+  $('#g-shelf', m.el).oninput = later;
+  $('#g-seq', m.el).oninput = () => { seqTouched = true; later(); };
+  $('#g-sku', m.el).oninput = e => { e.target.value = e.target.value.toUpperCase(); later(); };
+  refresh();
+
+  function showResult(r) {
+    const q = r.quality;
     $('#g-result', m.el).innerHTML = `
-      <div class="callout ok"><b>File siap cetak berhasil dibuat.</b> ${r.replaced.map(x => `<br><span class="mono">${esc(x.before)}</span> → <b class="mono">${esc(x.after)}</b>${x.stroke ? ' <span class="small">(stroke dipertahankan)</span>' : ''}`).join('')}</div>
+      <div class="callout ok"><b>File siap cetak berhasil dibuat.</b> ${r.replaced.map(x => `<br><span class="mono">${esc(x.before)}</span> → <b class="mono">${esc(x.after)}</b>${x.stroke ? ' <span class="small">(stroke dipertahankan)</span>' : ''}`).join('')}
+        ${q ? `<br><span class="small">✅ Kualitas cetak terjaga: ${q.images} gambar identik byte-per-byte dengan file asli (resolusi & warna tidak diubah), ukuran halaman sama.</span>` : ''}</div>
       <div class="row"><a class="btn primary" href="${esc(r.url)}?download=1">${ICON.pdf} Download PDF</a><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">Buka di tab baru</a>
         <button class="btn" type="button" id="g-copy">Salin link</button><span class="muted small">${(r.size / 1024 / 1024).toFixed(2)} MB</span></div>
+      <div class="mono small" style="word-break:break-all">${esc(r.url)}</div>
       <iframe class="preview-frame" src="${esc(r.url)}#view=FitH" title="Pratinjau PDF"></iframe>`;
     $('#g-copy', m.el).onclick = () => navigator.clipboard.writeText(r.url).then(() => toast('Link disalin'));
     toast('File siap cetak dibuat');
     onDone && onDone();
+  }
+  $('#g-go', m.el).onclick = e => busy(e.target, async () => {
+    const body = { prod_date: $('#g-date', m.el).value, shelf_months: $('#g-shelf', m.el).value, seq: $('#g-seq', m.el).value,
+      sku_code: $('#g-sku', m.el).value.trim(), request_item_id: itemId };
+    if (plan?.duplicate) {
+      if (!confirm(`Nomor batch ${plan.batch} sudah pernah dipakai (${plan.duplicate}). Tetap gunakan nomor yang sama?`)) return;
+      body.allow_duplicate = true;
+    }
+    showResult(await api(`/api/variants/${variantId}/generate`, { method: 'POST', body }));
+    refresh();
   });
+  $('#g-mgo', m.el)?.addEventListener('click', e => busy(e.target, async () => {
+    showResult(await api(`/api/variants/${variantId}/generate`, { method: 'POST', body: { mode: 'manual', batch: $('#g-mbatch', m.el).value, exp: $('#g-mexp', m.el).value, request_item_id: itemId } }));
+  }));
 }
 
 async function viewGenerator(main) {
   let sel = {};
   main.innerHTML = `
   <div class="page-head"><div><h1>Generator Nomor Batch & Expired</h1>
-    <p>Pilih sticker, masukkan nomor batch & kode expired baru — aplikasi mengganti teks di file PDF asli (font Courier New) dan menyiapkan link download.</p></div></div>
+    <p>Pilih sticker, isi tanggal produksi & masa simpan — nomor batch dan expired dibuat otomatis sesuai POB, lalu teks di file PDF asli diganti (font Courier New) tanpa menurunkan kualitas gambar.</p></div></div>
   <div class="split">
     <div class="card card-pad stack" id="picker"></div>
     <div class="stack sticky">
       <div class="card card-pad stack"><h2>Sticker terpilih</h2><div id="gsel" class="muted">Belum ada sticker dipilih.</div>
         <button class="btn primary" id="gopen" disabled>Isi Batch & Exp →</button></div>
       <div class="card"><div class="card-head"><h2>Riwayat file yang dibuat</h2></div><div id="ghist"></div></div>
-      <div class="card card-pad stack"><h3>Font pengganti</h3><div id="gfont" class="small muted"></div>
+      <div class="card card-pad stack ${state.user.role === 'admin' ? '' : 'hidden'}"><h3>Font pengganti</h3><div id="gfont" class="small muted"></div>
         <div class="small muted">Upload file Courier New (C:\\Windows\\Fonts\\courbd.ttf untuk Bold, cour.ttf untuk Regular) agar hasil identik 100% dengan desain.</div>
         <div class="row"><label class="btn sm">Upload Courier New Bold<input type="file" accept=".ttf,.otf" data-w="bold" hidden></label>
           <label class="btn sm">Upload Courier New Regular<input type="file" accept=".ttf,.otf" data-w="regular" hidden></label></div></div>
@@ -964,7 +1030,7 @@ async function viewGenerator(main) {
   });
   $('#gopen').onclick = () => openGenerator({ variantId: sel.variant.id, title: `${sel.product.code ? sel.product.code + '. ' : ''}${sel.product.name} — ${sel.variant.name}`, onDone: loadHist });
   const showFont = f => $('#gfont').innerHTML = f.isCourierNew ? `✅ Menggunakan Courier New (<span class="mono">${esc(f.bold)}</span>, <span class="mono">${esc(f.regular)}</span>)` : `Saat ini memakai <b>FreeMono</b> (mirip Courier New, gratis & bebas lisensi).`;
-  api('/api/generator/font').then(showFont);
+  if (state.user.role === 'admin') api('/api/generator/font').then(showFont);
   $$('input[type=file][data-w]').forEach(inp => inp.onchange = async () => {
     const f = inp.files[0]; if (!f) return;
     try { showFont(await api('/api/generator/font?weight=' + inp.dataset.w, { method: 'POST', body: f, headers: { 'Content-Type': 'application/octet-stream' } })); toast('Font tersimpan'); }
@@ -1044,6 +1110,8 @@ async function openProduct(id, reload) {
       <label class="f" style="grid-column:span 2">Nama produk<input class="input" id="e-name" value="${esc(p.name)}"></label></div>
       <div class="grid2"><label class="f">Volume / isi<input class="input" id="e-vol" value="${esc(p.volume)}"></label>
       <label class="f">Link folder Drive<input class="input" id="e-link" value="${esc(p.drive_link)}"></label></div>
+      <div class="grid2"><label class="f">Kode SKU <span class="hint">untuk nomor batch (POB), mis. A01</span><input class="input mono" id="e-sku" maxlength="3" value="${esc(p.sku_code || '')}"></label>
+      <label class="f">Masa simpan default <span class="hint">bulan</span><input class="input" type="number" min="0" max="120" id="e-shelf" value="${esc(p.shelf_months || '')}" placeholder="36"></label></div>
       <label class="f">Detail / deskripsi<textarea class="input" id="e-desc">${esc(p.description)}</textarea></label>` : p.description ? `<p>${esc(p.description)}</p>` : ''}
     <h3>File sticker / variasi (${p.variants.length})</h3>
     <div class="variants">${p.variants.map(v => `<div class="vcard" style="cursor:default"><div class="img" ${bgThumb(v.drive_file_id, 600)}>${v.drive_file_id ? `<button class="zoom" data-zoom="${esc(v.drive_file_id)}" data-caption="${esc(v.name)}">Perbesar</button>` : ''}</div>
@@ -1058,7 +1126,7 @@ async function openProduct(id, reload) {
   if (!isAdmin) return;
   bindVariantFields(m.el, 'nv');
   $('#p-save', m.el).onclick = e => busy(e.target, async () => {
-    await api('/api/products/' + p.id, { method: 'PUT', body: { code: $('#e-code', m.el).value, name: $('#e-name', m.el).value, volume: $('#e-vol', m.el).value, drive_link: $('#e-link', m.el).value, description: $('#e-desc', m.el).value } });
+    await api('/api/products/' + p.id, { method: 'PUT', body: { code: $('#e-code', m.el).value, name: $('#e-name', m.el).value, volume: $('#e-vol', m.el).value, drive_link: $('#e-link', m.el).value, description: $('#e-desc', m.el).value, sku_code: $('#e-sku', m.el).value.trim(), shelf_months: $('#e-shelf', m.el).value } });
     for (const v of p.variants) {
       await api('/api/variants/' + v.id, { method: 'PUT', body: { name: $(`[data-vn="${v.id}"]`, m.el).value, dimension: $(`[data-vd="${v.id}"]`, m.el).value, volume: $(`[data-vv="${v.id}"]`, m.el).value, package_type: $(`[data-vt="${v.id}"]`, m.el).value } });
     }
@@ -1101,8 +1169,11 @@ async function openAddProduct(reload) {
     <div class="grid3">
       <label class="f">Brand<select class="input" id="a-brand"><option value="">— pilih —</option>${brands.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}<option value="__new">+ Brand baru…</option></select></label>
       <label class="f hidden" id="a-nb-wrap">Nama brand baru<input class="input" id="a-nb"></label>
-      <label class="f">Kode produk<input class="input mono" id="a-code" placeholder="mis. M240"></label>
+      <label class="f">Kode produk <span class="hint">otomatis</span><input class="input mono" id="a-code" placeholder="pilih brand dulu"></label>
+      <label class="f">Kode SKU <span class="hint">otomatis, untuk nomor batch</span><input class="input mono" id="a-sku" maxlength="3"></label>
+      <label class="f hidden" id="a-prefix-wrap">Awalan kode brand baru <span class="hint">mis. X → X001</span><input class="input mono" id="a-prefix" maxlength="3"></label>
     </div>
+    <div class="small muted" id="a-codes-note">Kode produk & Kode SKU dibuat otomatis oleh sistem (melanjutkan nomor terakhir di Google Sheet) dan langsung ditulis ke Google Sheet. Biarkan apa adanya kecuali perlu diubah.</div>
     <label class="f">Nama produk<input class="input" id="a-name" placeholder="mis. Baby Body Wash Calamine 250mL"></label>
     <div class="grid2"><label class="f">Volume / isi<input class="input" id="a-vol" placeholder="mis. 250 mL"></label>
       <label class="f">Link folder produk di Drive <span class="hint">(opsional)</span><input class="input" id="a-folder"></label></div>
@@ -1112,15 +1183,32 @@ async function openAddProduct(reload) {
     <div class="callout small">Setelah disimpan, produk langsung tampil di form request user. Variasi lain dapat ditambahkan dari detail produk.</div>`,
   { wide: true, foot: '<button class="btn" data-close>Batal</button><button class="btn primary" id="a-save">Simpan Produk</button>' });
   bindVariantFields(m.el, 'av');
-  $('#a-brand', m.el).onchange = e => $('#a-nb-wrap', m.el).classList.toggle('hidden', e.target.value !== '__new');
+  const codes = { code: '', sku: '' };
+  async function suggest() {
+    const b = $('#a-brand', m.el).value;
+    const qs = new URLSearchParams({ brand_id: b === '__new' ? '' : b, prefix: $('#a-prefix', m.el).value.trim() });
+    try {
+      const d = await api('/api/products/next-codes?' + qs);
+      const ci = $('#a-code', m.el), si = $('#a-sku', m.el);
+      if (!ci.value || ci.value === codes.code) ci.value = d.code || '';
+      if (!si.value || si.value === codes.sku) si.value = d.sku_code || '';
+      codes.code = d.code || ''; codes.sku = d.sku_code || '';
+      $('#a-prefix-wrap', m.el).classList.toggle('hidden', !(b === '__new' || d.needs_prefix));
+    } catch {}
+  }
+  $('#a-brand', m.el).onchange = e => { $('#a-nb-wrap', m.el).classList.toggle('hidden', e.target.value !== '__new'); suggest(); };
+  $('#a-prefix', m.el).oninput = e => { e.target.value = e.target.value.toUpperCase(); suggest(); };
+  suggest();
   $('#a-save', m.el).onclick = e => busy(e.target, async () => {
     let brandId = $('#a-brand', m.el).value;
     if (brandId === '__new') brandId = (await api('/api/brands', { method: 'POST', body: { name: $('#a-nb', m.el).value } })).id;
-    await api('/api/products', { method: 'POST', body: {
-      brand_id: brandId, code: $('#a-code', m.el).value, name: $('#a-name', m.el).value, volume: $('#a-vol', m.el).value,
+    const r = await api('/api/products', { method: 'POST', body: {
+      brand_id: brandId, code: $('#a-code', m.el).value, sku_code: $('#a-sku', m.el).value === codes.sku ? '' : $('#a-sku', m.el).value, prefix: $('#a-prefix', m.el).value, name: $('#a-name', m.el).value, volume: $('#a-vol', m.el).value,
       drive_link: $('#a-folder', m.el).value, description: $('#a-desc', m.el).value, variants: [readVariantFields(m.el, 'av')],
     } });
-    state.brands = null; toast('Produk baru ditambahkan'); m.close(); reload();
+    state.brands = null;
+    toast(`Produk baru ditambahkan — kode ${r.code}, SKU ${r.sku_code}${r.sheet === 'queued' ? ' (ditulis ke Google Sheet)' : ' · Google Sheet belum terhubung (lihat menu Kop Surat & PR)'}`);
+    m.close(); reload();
   });
 }
 
@@ -1196,7 +1284,9 @@ async function viewCompany(main) {
         ${c.logo_is_default ? '' : '<button class="btn sm" id="logo-del" type="button">Kembalikan logo bawaan</button>'}</div>
       <p class="small muted" style="margin:0">Buat Purchase Request dari detail request yang sudah disetujui → tombol <b>+ PR</b>.</p>
     </div>
-  </div>`;
+  </div>
+  <div class="card card-pad stack" style="margin-top:16px" id="gs"></div>`;
+  loadSheetCard();
   $('#cf').onsubmit = async e => {
     e.preventDefault();
     await busy(e.submitter, async () => { await api('/api/settings/company', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Kop surat disimpan'); });
@@ -1210,6 +1300,36 @@ async function viewCompany(main) {
   };
   const del = $('#logo-del');
   if (del) del.onclick = async () => { await api('/api/settings/company', { method: 'PUT', body: { company_logo: '' } }); viewCompany(main); };
+}
+
+const OUTBOX_LABEL = { appendSku: 'Kode SKU baru', appendProduct: 'Produk baru', appendBatch: 'Nomor batch' };
+async function loadSheetCard() {
+  const el = $('#gs'); if (!el) return;
+  const d = await api('/api/settings/sheet');
+  el.innerHTML = `
+    <h2>Koneksi Google Sheet (Kode SKU & Nomor Batch)</h2>
+    <p class="small muted" style="margin:0">Aplikasi <b>membaca</b> kode SKU & nomor batch dari <a href="https://docs.google.com/spreadsheets/d/${esc(d.sheet_id)}/edit" target="_blank" rel="noopener">Google Sheet Numerik Sticker</a> secara otomatis.
+      Agar aplikasi juga bisa <b>menulis</b> (kode produk baru ke tab brand & KODE SKU, nomor batch ke tab Nomor Batch), pasang Apps Script dari file
+      <span class="mono">google-apps-script/Code.gs</span> (panduan ada di <span class="mono">PANDUAN-GOOGLE-SHEET.md</span>), lalu tempel URL Web App-nya di sini.</p>
+    <form class="grid2" id="gs-f">
+      <label class="f">URL Web App Apps Script<input class="input mono" name="url" value="${esc(d.url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="f">Token rahasia <span class="hint">${d.has_token ? 'sudah diatur — kosongkan bila tidak diubah' : 'samakan dengan TOKEN di Code.gs'}</span><input class="input mono" name="token" type="password" autocomplete="off"></label>
+      <div class="row"><button class="btn primary">Simpan</button><button class="btn" type="button" id="gs-test">Tes koneksi</button>
+        <button class="btn" type="button" id="gs-flush">Kirim ulang antrean (${d.pending})</button></div>
+    </form>
+    ${d.outbox.length ? `<div class="table-wrap"><table class="t cards-sm"><thead><tr><th>Waktu</th><th>Jenis</th><th>Isi</th><th>Status</th></tr></thead><tbody>
+      ${d.outbox.slice(0, 15).map(o => `<tr><td data-label="Waktu" class="small">${fmtDate(o.created_at, true)}</td><td data-label="Jenis">${esc(OUTBOX_LABEL[o.action] || o.action)}</td>
+        <td data-label="Isi" class="small mono">${esc(o.payload.batch || o.payload.sku || '')} ${esc(o.payload.kode_numerik || '')} ${esc(o.payload.product || o.payload.name || '')}</td>
+        <td data-label="Status">${o.status === 'sent' ? '<span class="badge approved">Terkirim</span>' : o.status === 'error' ? `<span class="badge rejected" title="${esc(o.error)}">Gagal</span> <span class="small muted">${esc(o.error)}</span>` : '<span class="badge pending">Menunggu</span>'}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}`;
+  $('#gs-f').onsubmit = async e => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target));
+    if (!body.token) delete body.token;
+    await busy(e.submitter, async () => { await api('/api/settings/sheet', { method: 'PUT', body }); toast('Koneksi Google Sheet disimpan'); loadSheetCard(); });
+  };
+  $('#gs-test').onclick = e => busy(e.target, async () => { const r = await api('/api/settings/sheet/test', { method: 'POST', body: {} }); toast('Terhubung ke: ' + (r.result.spreadsheet || 'Google Sheet')); });
+  $('#gs-flush').onclick = e => busy(e.target, async () => { const r = await api('/api/settings/sheet/flush', { method: 'POST', body: {} }); toast(r.pending ? `${r.pending} masih gagal — cek pesan error` : 'Semua antrean terkirim'); loadSheetCard(); });
 }
 
 // ---------------- reports ----------------

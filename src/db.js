@@ -185,6 +185,37 @@ ensureColumn('requests', 'printed_by', "TEXT DEFAULT ''");
 ensureColumn('requests', 'delivered_at', "TEXT DEFAULT ''");
 ensureColumn('requests', 'delivered_by', "TEXT DEFAULT ''");
 ensureColumn('requests', 'delivered_note', "TEXT DEFAULT ''");
+// batch numbering (POB/KO/PD/001.01): SKU code per product, shelf life, and the register of issued batch numbers
+ensureColumn('products', 'sku_code', "TEXT DEFAULT ''");
+ensureColumn('products', 'shelf_months', 'INTEGER DEFAULT 0');
+db.exec(`
+CREATE TABLE IF NOT EXISTS batch_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch TEXT NOT NULL,
+  exp TEXT NOT NULL,
+  sku_code TEXT NOT NULL,
+  prod_month TEXT NOT NULL,          -- YYYY-MM
+  seq INTEGER NOT NULL,
+  prod_date TEXT DEFAULT '',
+  shelf_months INTEGER DEFAULT 0,
+  product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+  variant_id INTEGER REFERENCES variants(id) ON DELETE SET NULL,
+  request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+  request_item_id INTEGER REFERENCES request_items(id) ON DELETE SET NULL,
+  generated_id INTEGER REFERENCES generated_files(id) ON DELETE SET NULL,
+  created_by_name TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_batch_month ON batch_records(prod_month);
+CREATE TABLE IF NOT EXISTS sheet_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending | sent | error
+  error TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  sent_at TEXT DEFAULT ''
+);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_items_variant ON request_items(variant_id)');
 
 // ---- helpers ----
