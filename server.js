@@ -1017,8 +1017,9 @@ app.get('/api/purchase-requests/:id/pdf', auth('admin', 'purchasing', 'manager_d
   const r = loadRequest(pr.request_id);
   res.type('application/pdf');
   res.set('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${pr.number.replace(/\//g, '-')}.pdf"`);
-  const creatorSignature = db.prepare('SELECT signature FROM users WHERE id = ?').get(pr.created_by)?.signature || null;
-  await sendPdf(res, out => purchasePdf(out, { pr, request: r, company: companySettings(), baseUrl: baseUrl(req), creatorSignature }));
+  const creator = db.prepare('SELECT signature, role FROM users WHERE id = ?').get(pr.created_by) || {};
+  const creatorRole = { admin: 'Admin', purchasing: 'Purchasing', desainer: 'Desainer', manager_desain: 'Manager Desain' }[creator.role] || 'Admin';
+  await sendPdf(res, out => purchasePdf(out, { pr, request: r, company: companySettings(), baseUrl: baseUrl(req), creatorSignature: creator.signature || null, creatorRole }));
 }));
 
 // ---------- PDF reports ----------

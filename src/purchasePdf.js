@@ -60,7 +60,7 @@ function footer(doc, company, pr) {
   }
 }
 
-async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSignature }) {
+async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSignature, creatorRole = 'Admin' }) {
   const doc = new PDFDocument({ size: 'A4', margins: { top: 30, left: 46, right: 46, bottom: 52 }, bufferPages: true,
     info: { Title: `Purchase Request ${pr.number}`, Author: company.company_name } });
   doc.pipe(stream);
@@ -223,7 +223,7 @@ async function purchasePdf(stream, { pr, request, company, baseUrl, creatorSigna
   doc.moveDown(0.3);
   const ap = role => (request.approvals || []).find(a => a.role === role && a.decision === 'approved');
   const sigs = [
-    { h: 'Dibuat oleh,', role: 'Admin', name: pr.created_by_name, sig: creatorSignature },
+    { h: 'Dibuat oleh,', role: creatorRole, name: pr.created_by_name, sig: creatorSignature },
     { h: 'Diperiksa oleh,', role: 'Desainer', name: ap('desainer')?.user_name, sig: ap('desainer')?.signature },
     { h: 'Disetujui oleh,', role: 'Purchasing', name: ap('purchasing')?.user_name, sig: ap('purchasing')?.signature },
     { h: 'Konfirmasi Vendor,', role: pr.vendor_name, name: '', sig: null },

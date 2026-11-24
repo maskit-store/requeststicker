@@ -124,6 +124,9 @@ function didYouMean(query, scored) {
   const fixes = new Map();
   for (const s of scored.slice(0, 20)) for (const h of s.hits) {
     if (h.exact || !h.hit || h.hit === h.q) continue;
+    // only spelling corrections (close in sound / edit distance), never synonyms like kucing → cat
+    const a = phon(h.q), b = phon(h.hit);
+    if (!(b.startsWith(a) || lev(a, b, 2) <= 2)) continue;
     const m = fixes.get(h.q) || new Map();
     m.set(h.hit, (m.get(h.hit) || 0) + 1);
     fixes.set(h.q, m);
