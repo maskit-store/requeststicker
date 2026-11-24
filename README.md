@@ -51,6 +51,8 @@ Buka http://localhost:3000. Akun awal (segera ganti password di menu *Profil*):
 
 Variabel lingkungan opsional: `PORT`, `DATA_DIR` (database SQLite, thumbnail, file hasil generate), `BASE_URL` (URL publik untuk link di PDF), `ADMIN_PASSWORD`, `DEFAULT_PASSWORD`.
 
+Panduan deploy lengkap (Railway, VPS, komputer kantor) + checklist & backup: lihat **[DEPLOY.md](DEPLOY.md)**.
+
 Docker:
 
 ```bash

@@ -7,7 +7,7 @@ const { db, hashPassword, verifyPassword, getSetting, setSetting, tx, DATA_DIR }
 const { syncFromDrive, seedIfEmpty, driveFileLink, driveFolderLink, isSyncing, DEFAULT_ROOT } = require('./src/catalogSync');
 const { getThumbnail } = require('./src/thumbs');
 const { requestPdf, recapPdf, APPROVER_ROLES, STATUS_LABEL } = require('./src/reportPdf');
-const { detect, replaceBatchExp, fontInfo } = require('./src/batchReplace');
+const { detect, replaceBatchExp, fontInfo, UPLOAD_FONT_DIR: FONT_DIR } = require('./src/batchReplace');
 const { parseDimension, parseVolume, classifyPackaging, PACKAGING_TYPES } = require('./src/catalogParser');
 const { purchasePdf } = require('./src/purchasePdf');
 
@@ -30,7 +30,6 @@ const DIVISIONS = ['Tim Produksi', 'Tim Packing', 'Tim Gudang', 'Desain', 'Purch
 const ROLES = ['admin', 'user', 'manager_desain', 'purchasing', 'desainer'];
 const GEN_DIR = path.join(DATA_DIR, 'generated');
 const SRC_DIR = path.join(DATA_DIR, 'sources');
-const FONT_DIR = process.env.FONT_DIR || path.join(__dirname, 'fonts');
 fs.mkdirSync(GEN_DIR, { recursive: true });
 fs.mkdirSync(SRC_DIR, { recursive: true });
 
@@ -43,7 +42,9 @@ if (db.prepare('SELECT COUNT(*) n FROM users').get().n === 0) {
   ins.run('manager', 'Manager Desain', hashPassword(pw), 'manager_desain', 'Desain');
   ins.run('purchasing', 'Purchasing', hashPassword(pw), 'purchasing', 'Purchasing');
   ins.run('user', 'Tim Produksi', hashPassword(pw), 'user', 'Produksi');
-  console.log('Akun awal dibuat: admin/admin123 dan desainer, manager, purchasing, user (password: ' + pw + ')');
+  console.log(process.env.ADMIN_PASSWORD || process.env.DEFAULT_PASSWORD
+    ? 'Akun awal dibuat: admin, desainer, manager, purchasing, user (password dari ADMIN_PASSWORD / DEFAULT_PASSWORD).'
+    : 'Akun awal dibuat: admin/admin123 dan desainer, manager, purchasing, user (password: ganti123). SEGERA ganti password!');
 }
 const seeded = seedIfEmpty();
 if (seeded) console.log('Katalog awal dimuat dari seed:', seeded);
@@ -882,6 +883,12 @@ app.get('/api/stats', auth(), (req, res) => {
     awaiting_me: APPROVER_ROLES.includes(req.user.role) ? db.prepare(`SELECT COUNT(*) n FROM requests r WHERE r.status='pending'
       AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.request_id=r.id AND a.role=?)`).get(req.user.role).n : 0,
   });
+});
+
+// Health check for hosting platforms / uptime monitors.
+app.get('/healthz', (req, res) => {
+  db.prepare('SELECT 1').get();
+  res.json({ ok: true });
 });
 
 // ---------- static & errors ----------

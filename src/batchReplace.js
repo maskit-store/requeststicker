@@ -14,7 +14,10 @@ const {
 const fontkit = require('@pdf-lib/fontkit');
 const { parseOps, rebuild, pdfName } = require('./pdfContent');
 
-const FONT_DIR = process.env.FONT_DIR || path.join(__dirname, '..', 'fonts');
+// Uploaded fonts live in the data folder (persistent volume); bundled FreeMono stays in the app folder.
+const { DATA_DIR } = require('./db');
+const UPLOAD_FONT_DIR = process.env.FONT_DIR || path.join(DATA_DIR, 'fonts');
+const BUNDLED_FONT_DIR = path.join(__dirname, '..', 'fonts');
 
 const BATCH_RE = /^(.*?(?:\bB\s?\.?\s?N\b|\bNo\.?\s*Batch\b|\bBatch(?:\s*No\.?)?|\bLOT\b)\s*[.:]?\s*)([A-Za-z0-9][A-Za-z0-9\-\/.]*\d[A-Za-z0-9\-\/.]*)\s*$/i;
 const EXP_RE = /^(.*?(?:\bEXP(?:\.?\s*Date)?\b|\bE\.?D\b|\bBest\s*Before\b|\bBB\b)\s*[.:]?\s*)(\d{4,8}|\d{1,2}\s*[-\/. ]\s*\d{2,4}(?:\s*[-\/.]\s*\d{2,4})?|\d{1,2}\s*[A-Za-z]{3,9}\s*\d{2,4}|[A-Za-z]{3,9}\s*\d{2,4})\s*$/i;
@@ -24,9 +27,11 @@ function fontFile(bold) {
   const candidates = bold
     ? ['courbd.ttf', 'CourierNew-Bold.ttf', 'Courier New Bold.ttf', 'FreeMonoBold.ttf']
     : ['cour.ttf', 'CourierNew.ttf', 'Courier New.ttf', 'FreeMono.ttf'];
-  for (const c of candidates) {
-    const p = path.join(FONT_DIR, c);
-    if (fs.existsSync(p)) return p;
+  for (const dir of [UPLOAD_FONT_DIR, BUNDLED_FONT_DIR]) {
+    for (const c of candidates) {
+      const p = path.join(dir, c);
+      if (fs.existsSync(p)) return p;
+    }
   }
   throw new Error('Font pengganti tidak ditemukan di folder fonts/');
 }
@@ -505,4 +510,4 @@ async function replaceBatchExp(bytes, values) {
   return { pdf, replaced, verify };
 }
 
-module.exports = { detect, replaceBatchExp, classify, fontInfo, _scanStream: scanStream, _findMatches: findMatches };
+module.exports = { UPLOAD_FONT_DIR, detect, replaceBatchExp, classify, fontInfo, _scanStream: scanStream, _findMatches: findMatches };
