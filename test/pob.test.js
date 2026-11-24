@@ -91,3 +91,19 @@ test('print quality guard: images and page boxes stay byte-identical, tampering 
   bad.getPages()[0].setMediaBox(0, 0, 100, 75);
   await assert.rejects(verifyPrintQuality(src, Buffer.from(await bad.save())), e => e.code === 'QUALITY');
 });
+
+test('desainer and manager can manage the catalog; regular user cannot', async () => {
+  const brand = (await (await login('admin', 'admin123'))('/api/brands')).data.find(b => b.name === 'Wonderpaw');
+  const body = name => ({ brand_id: brand.id, name, variants: [{ drive_link: 'https://drive.google.com/file/d/1ZyXwVuTsRqPoNmLkJiHgFe/view', name: 'Label - 10 x 5 cm' }] });
+  for (const who of ['desainer', 'manager']) {
+    const c = await login(who);
+    const r = await c('/api/products', body('Produk Uji ' + who));
+    assert.strictEqual(r.status, 200, who);
+    assert.match(r.data.code, /^W\d{3}$/);
+    assert.strictEqual((await c('/api/products/' + r.data.id, { name: 'Produk Uji ' + who + ' (edit)' }, 'PUT')).status, 200);
+    assert.strictEqual((await c('/api/products/next-codes?brand_id=' + brand.id)).status, 200);
+  }
+  const u = await login('user');
+  assert.strictEqual((await u('/api/products', body('Tidak boleh'))).status, 403);
+  assert.strictEqual((await u('/api/sync', {})).status, 403);
+});

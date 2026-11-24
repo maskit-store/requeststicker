@@ -35,6 +35,9 @@ const SRC_DIR = path.join(DATA_DIR, 'sources');
 fs.mkdirSync(GEN_DIR, { recursive: true });
 fs.mkdirSync(SRC_DIR, { recursive: true });
 
+// Roles allowed to manage the sticker catalog (add/edit products, sync from Drive).
+const CATALOG_ROLES = ['admin', 'desainer', 'manager_desain'];
+
 // ---------- bootstrap ----------
 if (db.prepare('SELECT COUNT(*) n FROM users').get().n === 0) {
   const pw = process.env.DEFAULT_PASSWORD || 'ganti123';
@@ -248,7 +251,7 @@ app.get('/api/products', auth(), (req, res) => {
 });
 
 // Codes a new product would get (shown in the form before saving).
-app.get('/api/products/next-codes', auth('admin'), wrap(async (req, res) => {
+app.get('/api/products/next-codes', auth(...CATALOG_ROLES), wrap(async (req, res) => {
   const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(Number(req.query.brand_id));
   const code = brand ? await sku.nextProductCode(brand.id, brand.name, str(req.query.prefix, 3)) : null;
   res.json({ code, sku_code: await sku.nextSkuCode(), needs_prefix: !!brand && !code });
@@ -266,7 +269,7 @@ app.get('/api/products/:id', auth(), (req, res) => {
 });
 
 // Admin catalog management
-app.post('/api/brands', auth('admin'), (req, res) => {
+app.post('/api/brands', auth(...CATALOG_ROLES), (req, res) => {
   const name = str(req.body.name, 100);
   if (!name) throw bad('Nama brand wajib diisi.');
   const ex = db.prepare('SELECT * FROM brands WHERE name = ?').get(name);
@@ -294,7 +297,7 @@ function variantInput(body) {
   };
 }
 
-app.post('/api/products', auth('admin'), wrap(async (req, res) => {
+app.post('/api/products', auth(...CATALOG_ROLES), wrap(async (req, res) => {
   const brand = db.prepare('SELECT * FROM brands WHERE id = ?').get(Number(req.body.brand_id));
   if (!brand) throw bad('Pilih brand.');
   const name = str(req.body.name, 300);
@@ -340,7 +343,7 @@ function insertVariant(pid, body) {
     .run(pid, v.name, v.dimension, v.volume, v.tags, v.drive_file_id, v.drive_link, v.file_name, v.file_type, v.package_type, v.package_type_manual).lastInsertRowid);
 }
 
-app.put('/api/products/:id', auth('admin'), (req, res) => {
+app.put('/api/products/:id', auth(...CATALOG_ROLES), (req, res) => {
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!p) throw new HttpError(404, 'Produk tidak ditemukan.');
   const b = req.body;
@@ -355,15 +358,15 @@ app.put('/api/products/:id', auth('admin'), (req, res) => {
     b.active !== undefined ? (b.active ? 1 : 0) : p.active, p.id);
   res.json({ ok: true });
 });
-app.delete('/api/products/:id', auth('admin'), (req, res) => {
+app.delete('/api/products/:id', auth(...CATALOG_ROLES), (req, res) => {
   db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
-app.post('/api/products/:id/variants', auth('admin'), (req, res) => {
+app.post('/api/products/:id/variants', auth(...CATALOG_ROLES), (req, res) => {
   if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(req.params.id)) throw new HttpError(404, 'Produk tidak ditemukan.');
   res.json({ id: insertVariant(Number(req.params.id), req.body) });
 });
-app.put('/api/variants/:id', auth('admin'), (req, res) => {
+app.put('/api/variants/:id', auth(...CATALOG_ROLES), (req, res) => {
   const v = db.prepare('SELECT * FROM variants WHERE id = ?').get(req.params.id);
   if (!v) throw new HttpError(404, 'Variasi tidak ditemukan.');
   const b = req.body;
@@ -374,7 +377,7 @@ app.put('/api/variants/:id', auth('admin'), (req, res) => {
     pkgChanged ? b.package_type : v.package_type, pkgChanged ? 1 : v.package_type_manual, v.id);
   res.json({ ok: true });
 });
-app.delete('/api/variants/:id', auth('admin'), (req, res) => {
+app.delete('/api/variants/:id', auth(...CATALOG_ROLES), (req, res) => {
   db.prepare('UPDATE variants SET active = 0 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
@@ -385,7 +388,7 @@ app.get('/api/sync', auth(), (req, res) => {
     root_id: getSetting('drive_root_id', DEFAULT_ROOT), last_error: getSetting('last_sync_error', ''),
   });
 });
-app.post('/api/sync', auth('admin'), (req, res) => {
+app.post('/api/sync', auth(...CATALOG_ROLES), (req, res) => {
   if (req.body.root_link) {
     const id = extractDriveId(req.body.root_link);
     if (!id) throw bad('Link folder Google Drive tidak valid.');

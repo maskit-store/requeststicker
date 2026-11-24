@@ -28,6 +28,7 @@ const STATUS = {
   pending: 'Menunggu Persetujuan', approved: 'Disetujui', rejected: 'Ditolak', sent: 'Naik Cetak', done: 'Terkirim', cancelled: 'Dibatalkan',
 };
 const ROLE = { admin: 'Admin', user: 'User / Tim', manager_desain: 'Manager Desain', purchasing: 'Purchasing', desainer: 'Desainer' };
+const CATALOG_ROLES = ['admin', 'desainer', 'manager_desain'];
 const APPROVERS = ['desainer', 'purchasing'];
 const badge = s => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
 const UNDECIDED = 'Belum ditentukan';
@@ -219,7 +220,7 @@ function renderShell(app) {
     ['', 'Beranda'], ['baru', 'Buat Request'], ['request', 'Semua Request'], ['riwayat', 'Riwayat Pemesanan'],
     ...(APPROVERS.includes(u.role) ? [['persetujuan', 'Persetujuan <span class="count hidden" id="cnt-ap"></span>']] : []),
     ...(['admin', 'desainer'].includes(u.role) ? [['generator', 'Generator Batch & Exp']] : []),
-    ['katalog', u.role === 'admin' ? 'Kelola Katalog' : 'Katalog Sticker'],
+    ['katalog', CATALOG_ROLES.includes(u.role) ? 'Kelola Katalog' : 'Katalog Sticker'],
     ...(u.role === 'admin' || APPROVERS.includes(u.role) ? [['laporan', 'Laporan PDF']] : []),
     ...(u.role === 'admin' ? [['pengguna', 'Pengguna']] : []),
     ...(u.role === 'admin' ? [['kop', 'Kop Surat & PR']] : []),
@@ -1047,7 +1048,7 @@ async function viewGenerator(main) {
 
 // ---------------- catalog ----------------
 async function viewCatalog(main) {
-  const isAdmin = state.user.role === 'admin';
+  const isAdmin = CATALOG_ROLES.includes(state.user.role); // boleh kelola katalog
   const brands = await getBrands(true);
   const sync = await api('/api/sync');
   main.innerHTML = `
@@ -1101,7 +1102,7 @@ async function viewCatalog(main) {
 }
 
 async function openProduct(id, reload) {
-  const isAdmin = state.user.role === 'admin';
+  const isAdmin = CATALOG_ROLES.includes(state.user.role); // boleh kelola katalog
   const p = await api('/api/products/' + id);
   const m = modal(`${esc(p.code ? p.code + '. ' : '')}${esc(p.name)}`, `
     <div class="muted">${esc(p.brand_name)}${p.drive_link ? ` · <a href="${esc(p.drive_link)}" target="_blank" rel="noopener">Folder Google Drive</a>` : ''}</div>
